@@ -65,7 +65,7 @@ Inside the container shell:
 
 ```bash
 export HOME=/home
-codex auth
+codex login --device-auth
 ```
 
 Codex will display a short device code and a URL — open the URL in your browser, enter the code, and complete the login. Once done, verify the tokens were saved and exit:
