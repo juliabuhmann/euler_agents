@@ -260,6 +260,52 @@ ls /cluster/project/beltrao/<your-username>/workspaces/test-claude/
 cat /cluster/project/beltrao/<your-username>/workspaces/test-claude/hello.py
 ```
 
+### Controlling costs
+
+Claude charges per token, so long-running tasks can get expensive. Three knobs are available:
+
+| Knob | Controls | Default |
+|---|---|---|
+| `max_budget_usd` | Hard USD cap — Claude stops when the limit is hit | `10` (from `settings.json`) |
+| `effort` | Thinking depth: `low / medium / high / xhigh / max` | `null` (Claude's own default) |
+| `model` | Model choice — haiku ≪ sonnet ≪ opus in cost | `claude-sonnet-4-6` |
+
+**Priority order:** CLI flag > `task.json` > `config/settings.json`
+
+**Change the global default** in `config/settings.json`:
+
+```json
+"claude": {
+  "model": "claude-sonnet-4-6",
+  "effort": null,
+  "max_budget_usd": 10
+}
+```
+
+**Override per-job** on the command line:
+
+```bash
+bin/submit --agent claude --max-budget-usd 3 --effort low --task "Quick exploration task"
+bin/submit --agent claude --max-budget-usd 20 --effort high --task "Deep analysis task"
+```
+
+**Override per-task** in `config/task.json` (only applies when no `--task` flag is used):
+
+```json
+{
+  "task": "Run an autonomous improvement loop on ilp.py ...",
+  "project": "myanalysis",
+  "max_budget_usd": 15,
+  "effort": "high"
+}
+```
+
+The startup line in the job log confirms the effective values:
+
+```
+=== Running Claude Code (model=claude-sonnet-4-6 effort=default budget=$10) ===
+```
+
 ### Usage
 
 Claude uses the same interface as Codex — just pass `--agent claude`:
