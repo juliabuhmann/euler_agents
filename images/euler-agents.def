@@ -1,0 +1,57 @@
+Bootstrap: docker
+From: ghcr.io/astral-sh/uv:latest
+Stage: uv_stage
+
+Bootstrap: docker
+From: ubuntu:24.04
+
+%files from uv_stage
+    /uv /bin/
+    /uvx /bin/
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update && apt-get install -y --no-install-recommends \
+        bubblewrap \
+        build-essential \
+        ca-certificates \
+        curl \
+        git \
+        less \
+        python-is-python3 \
+        python3-dev \
+        python3-pip \
+        time \
+        vim \
+        wget \
+        zstd
+    rm -rf /var/lib/apt/lists/* && apt-get clean
+
+    # Node.js 24
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
+    apt-get update && apt-get install -y --no-install-recommends nodejs
+    rm -rf /var/lib/apt/lists/* && apt-get clean
+
+    # Codex CLI
+    npm install -g @openai/codex@latest
+    npm cache clean --force
+
+    # miniforge (conda + mamba) — agents create their own envs at runtime
+    curl -fsSLo /tmp/miniforge.sh \
+        https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
+    bash /tmp/miniforge.sh -b -p /opt/conda
+    rm /tmp/miniforge.sh
+    export PATH="/opt/conda/bin:$PATH"
+    /opt/conda/bin/conda clean -afy
+
+    # uv for fast pip installs
+    export UV_LINK_MODE=copy
+    uv pip install --system uv
+
+%environment
+    export PATH="/opt/conda/bin:$PATH"
+
+%runscript
+    export PATH="/opt/conda/bin:$PATH"
+    exec "$@"

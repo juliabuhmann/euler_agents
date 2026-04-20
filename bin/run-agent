@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Host-side launcher: resolves config, sets up workspace and tmpdir, fires Singularity.
+# Called by slurm/run-agent.sh (inside a SLURM job) or directly for interactive use.
+#
+# Usage: bin/run-agent [--agent codex|claude] [--task "prompt"] [--task-file FILE]
+#                      [--repo URL] [--model MODEL] [--project NAME] [--interactive]
+set -euo pipefail
+
+SCRIPT_PATH=$(realpath "$0")
+REPO_DIR=$(dirname "$(dirname "$SCRIPT_PATH")")
+SETTINGS="$REPO_DIR/config/settings.json"
+
+_setting() {
+    python3 -c "import json; s=json.load(open('$SETTINGS')); print($1)"
+}
+
+WORKSPACE_DIR=$(_setting "s['workspace_dir']")
+IMAGE_PATH=$(_setting "s['image_path']")
+
+# Parse args
+AGENT="codex"
+TASK=""
+TASK_FILE=""
+REPO_URL=""
+MODEL=""
+PROJECT=""
+INTERACTIVE=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --agent)      AGENT="$2";     shift 2 ;;
+        --task)       TASK="$2";      shift 2 ;;
+        --task-file)  TASK_FILE="$2"; shift 2 ;;
+        --repo)       REPO_URL="$2";  shift 2 ;;
+        --model)      MODEL="$2";     shift 2 ;;
+        --project)    PROJECT="$2";   shift 2 ;;
+        --interactive) INTERACTIVE=true; shift ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+    esac
+done
+
+# Resolve task: --task > --task-file > config/task.json
+if [[ -n "$TASK" ]]; then
+    : # already set
+elif [[ -n "$TASK_FILE" ]]; then
+    TASK=$(cat "$TASK_FILE")
+else
+    TASK=$(python3 -c "import json; t=json.load(open('$REPO_DIR/config/task.json')); print(t['task'])")
+    [[ -z "$REPO_URL" ]] && REPO_URL=$(python3 -c "import json; t=json.load(open('$REPO_DIR/config/task.json')); print(t.get('repo_url') or '')")
+    [[ -z "$PROJECT" ]] && PROJECT=$(python3 -c "import json; t=json.load(open('$REPO_DIR/config/task.json')); print(t.get('project') or '')")
+fi
+
+# Load API credentials from secrets.env if present (gitignored)
+SECRETS="$REPO_DIR/config/secrets.env"
+[[ -f "$SECRETS" ]] && source "$SECRETS"
+OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+
+# Resolve workspace: named project (persistent, reused) or timestamped (one-off)
+if [[ -n "$PROJECT" ]]; then
+    RUN_WORKSPACE="$WORKSPACE_DIR/$PROJECT"
+else
+    RUN_WORKSPACE="$WORKSPACE_DIR/${AGENT}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-interactive}"
+fi
+mkdir -p "$RUN_WORKSPACE"
+
+# Set up job-scoped tmpdir (scratch + conda caches)
+JOB_TMPDIR="${TMPDIR:-/tmp}/euler-agents.${SLURM_JOB_ID:-$$}"
+mkdir -p "$JOB_TMPDIR/scratch" "$JOB_TMPDIR/conda_pkgs"
+
+# Write task to job-specific scratch (not workspace) to avoid races on parallel jobs
+printf '%s' "$TASK" > "$JOB_TMPDIR/scratch/.task"
+
+# Give each job its own home copy so parallel jobs don't race on codex cache/state
+SOURCE_HOME="$REPO_DIR/home-codex"
+mkdir -p "$SOURCE_HOME"
+JOB_HOME="$JOB_TMPDIR/home-codex"
+cp -r "$SOURCE_HOME" "$JOB_HOME"
+
+echo "Workspace: $RUN_WORKSPACE"
+echo "Agent:     $AGENT"
+echo "Image:     $IMAGE_PATH"
+
+# Build --env args for singularity
+SING_ENV=(
+    --env "AGENT=$AGENT"
+    --env "REPO_URL=${REPO_URL:-}"
+    --env "AGENT_MODEL=${MODEL:-}"
+    --env "CONDA_ENVS_DIRS=/workspace/conda_envs:/opt/conda/envs"
+    --env "CONDA_PKGS_DIRS=/tmp/conda_pkgs"
+)
+[[ -n "$OPENAI_API_KEY" ]] && SING_ENV+=(--env "OPENAI_API_KEY=$OPENAI_API_KEY")
+
+SING_BINDS=(
+    --home "$JOB_HOME:/home"
+    --bind "$RUN_WORKSPACE:/workspace"
+    --bind "$REPO_DIR:/repo:ro"
+    --bind "$JOB_TMPDIR/scratch:/tmp"
+)
+
+if [[ "$INTERACTIVE" == true ]]; then
+    echo "Opening interactive shell inside container..."
+    echo "  Workspace: /workspace  (persists at $RUN_WORKSPACE)"
+    echo "  Run codex manually or explore the environment."
+    singularity shell \
+        --cleanenv --containall \
+        "${SING_ENV[@]}" \
+        "${SING_BINDS[@]}" \
+        "$IMAGE_PATH"
+else
+    singularity exec \
+        --cleanenv --containall \
+        "${SING_ENV[@]}" \
+        "${SING_BINDS[@]}" \
+        "$IMAGE_PATH" \
+        /repo/bin/inner.sh
+fi

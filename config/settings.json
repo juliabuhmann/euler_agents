@@ -1,0 +1,13 @@
+{
+  "workspace_dir": "/cluster/project/beltrao/jbuhmann/agentic_ai/workspaces",
+  "logs_dir": "/cluster/project/beltrao/jbuhmann/agentic_ai/logs",
+  "image_path": "/cluster/project/beltrao/jbuhmann/agentic_ai/images/euler-agents.sif",
+  "slurm": {
+    "time": "4:00:00",
+    "mem_per_cpu": "8G",
+    "cpus": 2
+  },
+  "codex": {
+    "model": "gpt-5.4"
+  }
+}
