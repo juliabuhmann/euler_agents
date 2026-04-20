@@ -24,6 +24,7 @@ TASK_FILE=""
 REPO_URL=""
 MODEL=""
 PROJECT=""
+REF_DIR=""
 INTERACTIVE=false
 
 while [[ $# -gt 0 ]]; do
@@ -34,6 +35,7 @@ while [[ $# -gt 0 ]]; do
         --repo)       REPO_URL="$2";  shift 2 ;;
         --model)      MODEL="$2";     shift 2 ;;
         --project)    PROJECT="$2";   shift 2 ;;
+        --ref)        REF_DIR="$2";   shift 2 ;;
         --interactive) INTERACTIVE=true; shift ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -96,6 +98,7 @@ SING_BINDS=(
     --bind "$REPO_DIR:/repo:ro"
     --bind "$JOB_TMPDIR/scratch:/tmp"
 )
+[[ -n "$REF_DIR" ]] && SING_BINDS+=(--bind "$REF_DIR:/reference:ro")
 
 if [[ "$INTERACTIVE" == true ]]; then
     echo "Opening interactive shell inside container..."
