@@ -4,6 +4,7 @@
 #
 # Usage: bin/run-agent [--agent codex|claude] [--task "prompt"] [--task-file FILE]
 #                      [--repo URL] [--model MODEL] [--project NAME] [--interactive]
+#                      [--max-budget-usd N] [--effort low|medium|high|xhigh|max]
 set -euo pipefail
 
 SCRIPT_PATH=$(realpath "$0")
@@ -23,34 +24,67 @@ TASK=""
 TASK_FILE=""
 REPO_URL=""
 MODEL=""
+MAX_BUDGET_USD=""
+AGENT_EFFORT=""
 PROJECT=""
 REF_DIR=""
 INTERACTIVE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --agent)      AGENT="$2";     shift 2 ;;
-        --task)       TASK="$2";      shift 2 ;;
-        --task-file)  TASK_FILE="$2"; shift 2 ;;
-        --repo)       REPO_URL="$2";  shift 2 ;;
-        --model)      MODEL="$2";     shift 2 ;;
-        --project)    PROJECT="$2";   shift 2 ;;
-        --ref)        REF_DIR="$2";   shift 2 ;;
-        --interactive) INTERACTIVE=true; shift ;;
+        --agent)          AGENT="$2";          shift 2 ;;
+        --task)           TASK="$2";           shift 2 ;;
+        --task-file)      TASK_FILE="$2";      shift 2 ;;
+        --repo)           REPO_URL="$2";       shift 2 ;;
+        --model)          MODEL="$2";          shift 2 ;;
+        --max-budget-usd) MAX_BUDGET_USD="$2"; shift 2 ;;
+        --effort)         AGENT_EFFORT="$2";   shift 2 ;;
+        --project)        PROJECT="$2";        shift 2 ;;
+        --ref)            REF_DIR="$2";        shift 2 ;;
+        --interactive)    INTERACTIVE=true;    shift ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
 
-# Resolve task: --task > --task-file > config/task.json
+# Helper: read a field from settings.json scoped to the current agent.
+# Each agent only reads its own section — codex and claude never share defaults.
+_agent_setting() {
+    python3 -c "
+import json, sys
+s = json.load(open('${SETTINGS}'))
+val = s.get('${AGENT}', {}).get(sys.argv[1])
+print('' if val is None else val)
+" "$1"
+}
+
+# Resolve task: --task > --task-file > config/task.json.
+# When reading task.json, also pull per-task overrides for model/effort/budget
+# (CLI flags above take highest priority and are already set).
 if [[ -n "$TASK" ]]; then
-    : # already set
+    : # already set by --task flag
 elif [[ -n "$TASK_FILE" ]]; then
     TASK=$(cat "$TASK_FILE")
 else
-    TASK=$(python3 -c "import json; t=json.load(open('$REPO_DIR/config/task.json')); print(t['task'])")
-    [[ -z "$REPO_URL" ]] && REPO_URL=$(python3 -c "import json; t=json.load(open('$REPO_DIR/config/task.json')); print(t.get('repo_url') or '')")
-    [[ -z "$PROJECT" ]] && PROJECT=$(python3 -c "import json; t=json.load(open('$REPO_DIR/config/task.json')); print(t.get('project') or '')")
+    _tj() {
+        python3 -c "
+import json, sys
+t = json.load(open('${REPO_DIR}/config/task.json'))
+val = t.get(sys.argv[1])
+print('' if val is None else val)
+" "$1"
+    }
+    TASK=$(_tj task)
+    [[ -z "$REPO_URL"       ]] && REPO_URL=$(_tj repo_url)
+    [[ -z "$PROJECT"        ]] && PROJECT=$(_tj project)
+    [[ -z "$MODEL"          ]] && MODEL=$(_tj model)
+    [[ -z "$MAX_BUDGET_USD" ]] && MAX_BUDGET_USD=$(_tj max_budget_usd)
+    [[ -z "$AGENT_EFFORT"   ]] && AGENT_EFFORT=$(_tj effort)
 fi
+
+# Fill any remaining blanks from agent-specific settings.json defaults.
+[[ -z "$MODEL"          ]] && MODEL=$(_agent_setting model)
+[[ -z "$MAX_BUDGET_USD" ]] && MAX_BUDGET_USD=$(_agent_setting max_budget_usd)
+[[ -z "$AGENT_EFFORT"   ]] && AGENT_EFFORT=$(_agent_setting effort)
 
 # Load API credentials from secrets.env if present (gitignored)
 SECRETS="$REPO_DIR/config/secrets.env"
@@ -88,6 +122,8 @@ SING_ENV=(
     --env "AGENT=$AGENT"
     --env "REPO_URL=${REPO_URL:-}"
     --env "AGENT_MODEL=${MODEL:-}"
+    --env "AGENT_MAX_BUDGET_USD=${MAX_BUDGET_USD:-}"
+    --env "AGENT_EFFORT=${AGENT_EFFORT:-}"
     --env "CONDA_ENVS_DIRS=/workspace/conda_envs:/opt/conda/envs"
     --env "CONDA_PKGS_DIRS=/tmp/conda_pkgs"
 )

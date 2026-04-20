@@ -11,6 +11,8 @@ mkdir -p /workspace/conda_envs /tmp/conda_pkgs
 AGENT="${AGENT:?AGENT env var not set}"
 REPO_URL="${REPO_URL:-}"
 MODEL="${AGENT_MODEL:-}"
+MAX_BUDGET_USD="${AGENT_MAX_BUDGET_USD:-}"
+AGENT_EFFORT="${AGENT_EFFORT:-}"
 JOB_ID="${SLURM_JOB_ID:-interactive}"
 
 TASK=$(cat /tmp/.task)
@@ -55,15 +57,15 @@ case "$AGENT" in
         ;;
     claude)
         MODEL="${MODEL:-claude-sonnet-4-6}"
-        echo "=== Running Claude Code (model=$MODEL) ==="
+        CLAUDE_ARGS=(--dangerously-skip-permissions --model "$MODEL" -p)
+        [[ -n "$MAX_BUDGET_USD" ]] && CLAUDE_ARGS+=(--max-budget-usd "$MAX_BUDGET_USD")
+        [[ -n "$AGENT_EFFORT"   ]] && CLAUDE_ARGS+=(--effort "$AGENT_EFFORT")
+        echo "=== Running Claude Code (model=$MODEL effort=${AGENT_EFFORT:-default} budget=\$${MAX_BUDGET_USD:-unlimited}) ==="
         echo "--- Task ---"
         echo "$TASK"
         echo "------------"
         set +e
-        claude \
-            --dangerously-skip-permissions \
-            --model "$MODEL" \
-            -p "$TASK_WITH_FOOTER"
+        claude "${CLAUDE_ARGS[@]}" "$TASK_WITH_FOOTER"
         AGENT_EXIT=$?
         set -e
         ;;
