@@ -56,6 +56,7 @@ fi
 SECRETS="$REPO_DIR/config/secrets.env"
 [[ -f "$SECRETS" ]] && source "$SECRETS"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 
 # Resolve workspace: named project (persistent, reused) or timestamped (one-off)
 if [[ -n "$PROJECT" ]]; then
@@ -72,10 +73,10 @@ mkdir -p "$JOB_TMPDIR/scratch" "$JOB_TMPDIR/conda_pkgs"
 # Write task to job-specific scratch (not workspace) to avoid races on parallel jobs
 printf '%s' "$TASK" > "$JOB_TMPDIR/scratch/.task"
 
-# Give each job its own home copy so parallel jobs don't race on codex cache/state
-SOURCE_HOME="$REPO_DIR/home-codex"
+# Give each job its own home copy so parallel jobs don't race on agent cache/state
+SOURCE_HOME="$REPO_DIR/home-${AGENT}"
 mkdir -p "$SOURCE_HOME"
-JOB_HOME="$JOB_TMPDIR/home-codex"
+JOB_HOME="$JOB_TMPDIR/home-${AGENT}"
 cp -r "$SOURCE_HOME" "$JOB_HOME"
 
 echo "Workspace: $RUN_WORKSPACE"
@@ -91,6 +92,8 @@ SING_ENV=(
     --env "CONDA_PKGS_DIRS=/tmp/conda_pkgs"
 )
 [[ -n "$OPENAI_API_KEY" ]] && SING_ENV+=(--env "OPENAI_API_KEY=$OPENAI_API_KEY")
+[[ -n "$ANTHROPIC_API_KEY" ]] && SING_ENV+=(--env "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+[[ -n "${SLURM_JOB_ID:-}" ]] && SING_ENV+=(--env "SLURM_JOB_ID=$SLURM_JOB_ID")
 
 SING_BINDS=(
     --home "$JOB_HOME:/home"

@@ -166,3 +166,117 @@ Once the job finishes, verify the output:
 ls /cluster/project/beltrao/<your-username>/workspaces/test-hello/
 cat /cluster/project/beltrao/<your-username>/workspaces/test-hello/hello.py
 ```
+
+---
+
+## Claude agent (optional)
+
+Most users run Codex. This section is for users who want to use Claude Code (`--agent claude`) instead.
+
+### Differences from Codex
+
+| | Codex | Claude |
+|---|---|---|
+| Auth | Browser OAuth, tokens stored in `home-codex/` | API key via env var, no browser login |
+| Key env var | `OPENAI_API_KEY` | `ANTHROPIC_API_KEY` |
+| Default model | `gpt-5.4` | `claude-sonnet-4-6` |
+
+### Setup
+
+**1. Get an Anthropic API key**
+
+Create one at [console.anthropic.com](https://console.anthropic.com). You need an account with API access enabled.
+
+**2. Make the key available to jobs**
+
+Either export it in your shell profile (`~/.bashrc` or `~/.zshrc`):
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Or write it to `config/secrets.env` (gitignored, loaded automatically by `bin/run-agent`):
+
+```bash
+echo "ANTHROPIC_API_KEY=sk-ant-..." > config/secrets.env
+chmod 600 config/secrets.env
+```
+
+The key is passed into the container via `--env` at job launch — it is never written to disk inside the container.
+
+Unlike Codex, there is no interactive login step. Once the key is in your environment, jobs work immediately.
+
+**3. (Optional) Override the default model**
+
+The default is `claude-sonnet-4-6`. To change it for all jobs, edit `config/settings.json`:
+
+```json
+"claude": {
+  "model": "claude-opus-4-7"
+}
+```
+
+Or override per-job with `--model`:
+
+```bash
+bin/submit --agent claude --model claude-opus-4-7 --task "..."
+```
+
+### Verify your setup
+
+First test interactively (no SLURM queue, runs immediately on the login node):
+
+```bash
+cd ~/src/euler_agents
+bin/run-agent --agent claude \
+    --task "Write a file called claude-check.txt containing 'claude works' and read it back."
+```
+
+You should see the agent run and a summary printed to stdout. Check the workspace output:
+
+```bash
+ls /cluster/project/beltrao/<your-username>/workspaces/claude_*/
+cat /cluster/project/beltrao/<your-username>/workspaces/claude_*/claude-check.txt
+```
+
+Then submit a real SLURM job:
+
+```bash
+bin/submit --agent claude --project test-claude \
+    --task "Write a Python script called hello.py that prints 'Hello from Claude on Euler' and run it."
+```
+
+Follow the job:
+
+```bash
+squeue -u $USER
+tail -f /cluster/project/beltrao/<your-username>/logs/slurm-<jobid>.out
+```
+
+Verify the output:
+
+```bash
+ls /cluster/project/beltrao/<your-username>/workspaces/test-claude/
+cat /cluster/project/beltrao/<your-username>/workspaces/test-claude/hello.py
+```
+
+### Usage
+
+Claude uses the same interface as Codex — just pass `--agent claude`:
+
+```bash
+# One-off task
+bin/submit --agent claude --task "Add type annotations to all functions in src/"
+
+# Named project (workspace reused across jobs)
+bin/submit --agent claude --project myanalysis --task "Clone the repo and explore the data"
+bin/submit --agent claude --project myanalysis --task "Now write a summary report"
+
+# Clone a repo first
+bin/submit --agent claude --project myanalysis \
+    --repo https://github.com/org/myrepo \
+    --task "Understand the codebase and write a README"
+
+# Interactive shell on a compute node
+bin/submit --interactive --agent claude --project myanalysis
+```

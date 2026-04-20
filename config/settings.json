@@ -9,5 +9,8 @@
   },
   "codex": {
     "model": "gpt-5.4"
+  },
+  "claude": {
+    "model": "claude-sonnet-4-6"
   }
 }

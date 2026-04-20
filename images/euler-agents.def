@@ -35,6 +35,9 @@ From: ubuntu:24.04
 
     # Codex CLI
     npm install -g @openai/codex@latest
+
+    # Claude Code CLI
+    npm install -g @anthropic-ai/claude-code@latest
     npm cache clean --force
 
     # miniforge (conda + mamba) — agents create their own envs at runtime
