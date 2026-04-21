@@ -318,6 +318,28 @@ The cost is read from the `total_cost_usd` field in Claude Code's JSON output an
 
 > **Codex:** cost reporting is not yet implemented.
 
+### Smoke test
+
+Run this to verify the full workflow (Singularity → Claude → REPORT.md):
+
+```bash
+bin/submit --agent claude \
+    --project harness-test \
+    --model claude-haiku-4-5-20251001 \
+    --max-budget-usd 0.10 \
+    --task "Write the string 'hello from SLURM' to /workspace/hello.txt."
+```
+
+After the job finishes, check (substitute your `workspace_dir` from `config/settings.json`):
+
+```bash
+WORKSPACE=$(python3 -c "import json; print(json.load(open('config/settings.json'))['workspace_dir'])")
+cat "$WORKSPACE/harness-test/hello.txt"
+cat "$WORKSPACE/harness-test/REPORT.md"
+```
+
+The REPORT.md entry should include a `cost=` field confirming cost extraction works.
+
 ### Usage
 
 Claude uses the same interface as Codex — just pass `--agent claude`:
