@@ -306,6 +306,18 @@ The startup line in the job log confirms the effective values:
 === Running Claude Code (model=claude-sonnet-4-6 effort=default budget=$10) ===
 ```
 
+### Cost reporting
+
+After each run the actual cost is recorded in `REPORT.md` alongside the job metadata:
+
+```
+## Run 2026-04-21T12:00:00Z  (job=12345  model=claude-sonnet-4-6  exit=0  cost=$1.2340)
+```
+
+The cost is read from the `total_cost_usd` field in Claude Code's JSON output and reflects all token charges for that job (including cache reads).
+
+> **Codex:** cost reporting is not yet implemented.
+
 ### Usage
 
 Claude uses the same interface as Codex — just pass `--agent claude`:

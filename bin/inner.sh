@@ -57,7 +57,7 @@ case "$AGENT" in
         ;;
     claude)
         MODEL="${MODEL:-claude-sonnet-4-6}"
-        CLAUDE_ARGS=(--dangerously-skip-permissions --model "$MODEL" -p)
+        CLAUDE_ARGS=(--dangerously-skip-permissions --model "$MODEL" -p --output-format json)
         [[ -n "$MAX_BUDGET_USD" ]] && CLAUDE_ARGS+=(--max-budget-usd "$MAX_BUDGET_USD")
         [[ -n "$AGENT_EFFORT"   ]] && CLAUDE_ARGS+=(--effort "$AGENT_EFFORT")
         echo "=== Running Claude Code (model=$MODEL effort=${AGENT_EFFORT:-default} budget=\$${MAX_BUDGET_USD:-unlimited}) ==="
@@ -65,7 +65,7 @@ case "$AGENT" in
         echo "$TASK"
         echo "------------"
         set +e
-        claude "${CLAUDE_ARGS[@]}" "$TASK_WITH_FOOTER"
+        claude "${CLAUDE_ARGS[@]}" "$TASK_WITH_FOOTER" > /tmp/claude-output.json
         AGENT_EXIT=$?
         set -e
         ;;
@@ -75,11 +75,39 @@ case "$AGENT" in
         ;;
 esac
 
+# Extract cost and summary from Claude JSON output
+AGENT_COST=""
+if [[ "$AGENT" == "claude" && -f /tmp/claude-output.json ]]; then
+    AGENT_COST=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('/tmp/claude-output.json'))
+    cost = d.get('total_cost_usd')
+    if cost is not None:
+        print(f'\${cost:.4f}')
+except Exception:
+    pass
+" 2>/dev/null)
+    # If agent didn't write a summary file, extract it from the JSON result field
+    if [[ ! -f /tmp/run-summary.txt ]]; then
+        python3 -c "
+import json, sys
+try:
+    d = json.load(open('/tmp/claude-output.json'))
+    result = d.get('result', '').strip()
+    if result:
+        open('/tmp/run-summary.txt', 'w').write(result + '\n')
+except Exception:
+    pass
+" 2>/dev/null
+    fi
+fi
+
 # Append agent-written summary to REPORT.md
 if [[ -f /tmp/run-summary.txt ]]; then
     {
-        printf '\n## Run %s  (job=%s  model=%s  exit=%s)\n\n' \
-            "$RUN_TS" "$JOB_ID" "$MODEL" "$AGENT_EXIT"
+        printf '\n## Run %s  (job=%s  model=%s  exit=%s%s)\n\n' \
+            "$RUN_TS" "$JOB_ID" "$MODEL" "$AGENT_EXIT" "${AGENT_COST:+  cost=$AGENT_COST}"
         cat /tmp/run-summary.txt
     } >> /workspace/REPORT.md
     echo "=== Summary appended to /workspace/REPORT.md ==="
