@@ -77,37 +77,38 @@ esac
 
 # Extract cost and summary from Claude JSON output
 AGENT_COST=""
-if [[ "$AGENT" == "claude" && -f /tmp/claude-output.json ]]; then
-    AGENT_COST=$(python3 -c "
+if [[ "$AGENT" == "claude" ]]; then
+    AGENT_COST=$(python3 -c '
 import json, sys
 try:
-    d = json.load(open('/tmp/claude-output.json'))
-    cost = d.get('total_cost_usd')
+    data = json.load(open("/tmp/claude-output.json"))
+    cost = data.get("total_cost_usd")
     if cost is not None:
-        print(f'\${cost:.4f}')
-except Exception:
-    pass
-" 2>/dev/null)
+        print("%.4f" % cost)
+except Exception as e:
+    print("Warning: could not parse claude-output.json: %s" % e, file=sys.stderr)
+')
     # If agent didn't write a summary file, extract it from the JSON result field
     if [[ ! -f /tmp/run-summary.txt ]]; then
-        python3 -c "
+        python3 -c '
 import json, sys
 try:
-    d = json.load(open('/tmp/claude-output.json'))
-    result = d.get('result', '').strip()
+    data = json.load(open("/tmp/claude-output.json"))
+    result = data.get("result", "").strip()
     if result:
-        open('/tmp/run-summary.txt', 'w').write(result + '\n')
-except Exception:
-    pass
-" 2>/dev/null
+        open("/tmp/run-summary.txt", "w").write(result + "\n")
+except Exception as e:
+    print("Warning: could not extract summary from claude-output.json: %s" % e, file=sys.stderr)
+'
     fi
 fi
 
 # Append agent-written summary to REPORT.md
+MODEL="${MODEL:-unknown}"
 if [[ -f /tmp/run-summary.txt ]]; then
     {
         printf '\n## Run %s  (job=%s  model=%s  exit=%s%s)\n\n' \
-            "$RUN_TS" "$JOB_ID" "$MODEL" "$AGENT_EXIT" "${AGENT_COST:+  cost=$AGENT_COST}"
+            "$RUN_TS" "$JOB_ID" "$MODEL" "$AGENT_EXIT" "${AGENT_COST:+  cost=\$$AGENT_COST}"
         cat /tmp/run-summary.txt
     } >> /workspace/REPORT.md
     echo "=== Summary appended to /workspace/REPORT.md ==="
