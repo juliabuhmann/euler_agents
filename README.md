@@ -1,5 +1,7 @@
 # euler_agents
 
+## In a nutshell
+
 AI coding agents take time. A task like "refactor this module", "write tests for this codebase", or "analyse this dataset and produce a report" can run for minutes to hours. This repository lets you submit those tasks to the Euler HPC cluster as ordinary SLURM batch jobs — fire and forget, just like any compute job.
 
 You write a task in plain English. The agent (Codex or Claude) gets a compute node, a clean Singularity environment, and a persistent workspace on cluster storage. You come back to the results.
@@ -17,26 +19,32 @@ cat /path/to/workspaces/my-analysis/results/report.md   # read the output
 cat /path/to/workspaces/my-analysis/REPORT.md           # agent's own run summary + cost
 ```
 
-**What you get:**
 - Tasks run unattended on a compute node — no keeping a terminal open, no babysitting
 - The agent can clone repos, install conda packages, read and write files freely
 - Named projects (`--project`) give the agent a persistent workspace across multiple jobs — useful for multi-step work where later tasks build on earlier results
 - Claude jobs record actual cost in `REPORT.md` so you know what each run spent
 
-**Sandbox boundary — what is isolated:**
-- The agent runs inside a Singularity container with `--cleanenv --containall`: no access to your home directory, other cluster paths, or any host mount not explicitly listed
-- The harness repo itself is mounted read-only (`/repo:ro`) — the agent cannot modify the scripts that launched it
-- Each job gets its own private tmpdir, so parallel jobs don't interfere with each other
-- The agent runs as your own user UID — no privilege escalation is possible
+## Sandbox and risks
 
-**Risks — what is not protected:**
-- **Unrestricted execution within the container.** Both agents run with all confirmation prompts disabled. Inside the container, the agent executes arbitrary shell commands and code with no approval step.
-- **Full write access to the workspace.** The agent can delete, overwrite, or corrupt everything in `/workspace`, including prior results in a named project. There is no undo.
-- **Outbound network.** The container has internet access (via the `eth_proxy` module). The agent can make HTTP requests, clone external repos, or call third-party APIs.
-- **API key exposure.** `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are injected as environment variables. If the agent reads and exfiltrates its own environment — or if a cloned repo contains a prompt-injection attack — those keys are at risk. Keep the keys scoped and rotate them if you suspect a problem.
+The agent runs inside a Singularity container with `--cleanenv --containall`. What this means in practice:
+
+| | Detail |
+|---|---|
+| Host filesystem | No access — only the explicitly bound directories are visible |
+| Home directory | Not mounted; the container gets its own isolated `$HOME` |
+| Harness repo | Mounted read-only (`/repo:ro`) — the agent cannot modify the scripts that launched it |
+| Parallel jobs | Each job gets a private tmpdir; jobs don't interfere with each other |
+| Privilege | Runs as your own UID — no root, no escalation possible |
+
+What the sandbox does **not** protect against:
+
+- **Unrestricted execution.** Both agents run with all confirmation prompts disabled. Inside the container, the agent executes arbitrary shell commands and code without an approval step.
+- **Workspace mutations.** The agent has full write access to `/workspace`. It can delete or overwrite prior results in a named project. There is no undo.
+- **Outbound network.** The container has internet access. The agent can make HTTP requests, clone external repos, or call third-party APIs.
+- **API key exposure.** `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are injected as environment variables. A prompt-injection attack in a cloned repo could exfiltrate them. Keep keys scoped and rotate if in doubt.
 - **Cost overruns.** Codex has no spending cap. Claude defaults to `--max-budget-usd 10`; set it explicitly for expensive tasks.
 
-The practical rule: treat anything you pass to the agent (repo content, task prompt, reference data) the same way you would treat code you're about to `bash -c` on a compute node — because that is roughly what happens.
+The practical rule: treat anything you pass to the agent — repo content, task prompt, reference data — the way you would treat code you are about to `bash -c` on a compute node, because that is roughly what happens.
 
 ---
 
