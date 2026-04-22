@@ -23,6 +23,21 @@ cat /path/to/workspaces/my-analysis/REPORT.md           # agent's own run summar
 - Named projects (`--project`) give the agent a persistent workspace across multiple jobs — useful for multi-step work where later tasks build on earlier results
 - Claude jobs record actual cost in `REPORT.md` so you know what each run spent
 
+**Sandbox boundary — what is isolated:**
+- The agent runs inside a Singularity container with `--cleanenv --containall`: no access to your home directory, other cluster paths, or any host mount not explicitly listed
+- The harness repo itself is mounted read-only (`/repo:ro`) — the agent cannot modify the scripts that launched it
+- Each job gets its own private tmpdir, so parallel jobs don't interfere with each other
+- The agent runs as your own user UID — no privilege escalation is possible
+
+**Risks — what is not protected:**
+- **Unrestricted execution within the container.** Both agents run with all confirmation prompts disabled. Inside the container, the agent executes arbitrary shell commands and code with no approval step.
+- **Full write access to the workspace.** The agent can delete, overwrite, or corrupt everything in `/workspace`, including prior results in a named project. There is no undo.
+- **Outbound network.** The container has internet access (via the `eth_proxy` module). The agent can make HTTP requests, clone external repos, or call third-party APIs.
+- **API key exposure.** `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are injected as environment variables. If the agent reads and exfiltrates its own environment — or if a cloned repo contains a prompt-injection attack — those keys are at risk. Keep the keys scoped and rotate them if you suspect a problem.
+- **Cost overruns.** Codex has no spending cap. Claude defaults to `--max-budget-usd 10`; set it explicitly for expensive tasks.
+
+The practical rule: treat anything you pass to the agent (repo content, task prompt, reference data) the same way you would treat code you're about to `bash -c` on a compute node — because that is roughly what happens.
+
 ---
 
 ## Setup
