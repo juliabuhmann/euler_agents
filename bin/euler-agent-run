@@ -7,6 +7,57 @@
 #                        [--max-budget-usd N] [--effort low|medium|high|xhigh|max]
 set -euo pipefail
 
+usage() {
+    cat <<'EOF'
+euler-agent-run — set up workspace and launch an agent inside the Singularity container
+
+USAGE
+  euler-agent-run [OPTIONS]
+
+Called automatically by SLURM via slurm/run-agent.sh. You can also invoke it
+directly on a compute node (e.g. after euler-agent-submit --interactive).
+
+OPTIONS
+  --agent  codex|claude       Agent to run (default: codex)
+  --task   "PROMPT"           Task description
+  --task-file FILE            Read task from a file instead of --task
+  --repo   URL                Git repo to clone into /workspace before running
+  --model  MODEL              Model override (e.g. claude-sonnet-4-6, gpt-5.4)
+  --project NAME              Named workspace; persists and is reused across jobs.
+                              Without --project, a fresh timestamped dir is created.
+  --max-budget-usd N          Hard USD spending cap (Claude only)
+  --effort low|medium|high|xhigh|max
+                              Thinking depth (Claude only)
+  --ref DIR                   Bind a reference directory to /reference inside the container
+  --interactive               Open an interactive shell inside the container instead of running
+  -h, --help                  Show this help
+
+Task resolution order (highest priority first):
+  1. --task flag
+  2. --task-file flag
+  3. config/task.json (also pulls model, effort, budget, repo_url, project from there)
+  4. Agent defaults in config/settings.json
+
+EXAMPLES
+  # Run claude on a task (on a compute node or in an existing SLURM job)
+  euler-agent-run --agent claude --task "Write unit tests for src/utils.py" \
+      --project myproject --max-budget-usd 5
+
+  # Interactive shell inside the Singularity container
+  euler-agent-run --agent codex --project myproject --interactive
+
+  # Provide a reference dataset inside the container
+  euler-agent-run --agent claude --project myproject \
+      --ref /cluster/project/beltrao/shared/data \
+      --task "Analyse the CSV files in /reference and write a summary."
+
+CONFIGURATION
+  config/settings.json   Image path, workspace dir, per-agent model/budget defaults
+  config/task.json       Default task used when no --task / --task-file given
+  config/secrets.env     API keys (gitignored, sourced automatically)
+EOF
+}
+
 SCRIPT_PATH=$(realpath "$0")
 REPO_DIR=$(dirname "$(dirname "$SCRIPT_PATH")")
 SETTINGS="$REPO_DIR/config/settings.json"
@@ -32,6 +83,7 @@ INTERACTIVE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -h|--help)        usage; exit 0 ;;
         --agent)          AGENT="$2";          shift 2 ;;
         --task)           TASK="$2";           shift 2 ;;
         --task-file)      TASK_FILE="$2";      shift 2 ;;
@@ -42,7 +94,7 @@ while [[ $# -gt 0 ]]; do
         --project)        PROJECT="$2";        shift 2 ;;
         --ref)            REF_DIR="$2";        shift 2 ;;
         --interactive)    INTERACTIVE=true;    shift ;;
-        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+        *) echo "Unknown argument: $1" >&2; echo "Run with --help for usage." >&2; exit 1 ;;
     esac
 done
 

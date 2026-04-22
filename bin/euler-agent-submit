@@ -9,6 +9,51 @@
 # --interactive opens a shell on a compute node (srun) instead of submitting via sbatch.
 set -euo pipefail
 
+usage() {
+    cat <<'EOF'
+euler-agent-submit — submit an AI coding agent job to Euler's SLURM cluster
+
+USAGE
+  euler-agent-submit [OPTIONS]
+
+OPTIONS
+  --agent  codex|claude   Agent to run (default: codex)
+  --task   "PROMPT"       Task description passed to the agent
+  --task-file FILE        Read task from a file instead of --task
+  --repo   URL            Git repo to clone into the workspace before running
+  --model  MODEL          Override the model (e.g. claude-sonnet-4-6, gpt-5.4)
+  --time   HH:MM:SS       SLURM wall-clock limit (default from config/settings.json)
+  --interactive           Open a shell on a compute node via srun instead of sbatch
+  -h, --help              Show this help
+
+Without --task / --task-file, reads the task from config/task.json.
+Additional flags (--project, --max-budget-usd, --effort, --ref) are forwarded
+to euler-agent-run; see: euler-agent-run --help
+
+EXAMPLES
+  # One-off task
+  euler-agent-submit --agent codex --task "Add type annotations to src/"
+
+  # Named project (workspace persists across jobs)
+  euler-agent-submit --agent claude --project myanalysis \
+      --task "Explore the dataset and write a summary"
+
+  # Read task from a file
+  euler-agent-submit --agent claude --task-file tasks/myanalysis.md
+
+  # Interactive shell on a compute node
+  euler-agent-submit --interactive --agent codex --project myanalysis
+
+  # Longer time limit
+  euler-agent-submit --agent claude --task "..." --time 8:00:00
+
+CONFIGURATION
+  config/settings.json   SLURM defaults (time, mem, cpus), workspace/logs paths
+  config/task.json       Default task, model, and budget (used when no --task flag)
+  config/secrets.env     API keys (gitignored, sourced automatically)
+EOF
+}
+
 SCRIPT_PATH=$(realpath "$0")
 REPO_DIR=$(dirname "$(dirname "$SCRIPT_PATH")")
 SETTINGS="$REPO_DIR/config/settings.json"
@@ -28,6 +73,7 @@ PASSTHROUGH=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -h|--help) usage; exit 0 ;;
         --interactive) INTERACTIVE=true; shift ;;
         --time) OVERRIDE_TIME="$2"; shift 2 ;;
         *) PASSTHROUGH+=("$1"); shift ;;
