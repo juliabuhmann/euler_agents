@@ -2,9 +2,9 @@
 
 ## In a nutshell
 
-AI coding agents take time. A task like "refactor this module", "write tests for this codebase", or "analyse this dataset and produce a report" can run for minutes to hours. This repository lets you submit those tasks to the Euler HPC cluster as ordinary SLURM batch jobs — fire and forget, just like any compute job.
+Run Codex or Claude Code as unattended SLURM batch jobs on Euler. Tasks run inside a Singularity container, which isolates the agent from the host filesystem — it can only access the workspace directory and a read-only copy of this repository.
 
-You write a task in plain English. The agent (Codex or Claude) gets a compute node, a clean Singularity environment, and a persistent workspace on cluster storage. You come back to the results.
+**What is Singularity?** A container technology for HPC clusters (similar to Docker, but no root required). The agent's runtime — Codex or Claude Code, conda, all dependencies — is packaged into a single image file (`euler-agents.sif`). Each job runs inside that image, with no visibility into the rest of the cluster.
 
 ```bash
 euler-agent-submit --agent claude \
@@ -65,18 +65,18 @@ Add `~/.local/bin` to your PATH if it isn't already (add to `~/.bashrc`):
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Edit `config/settings.json` — set your workspace and logs paths (use cluster project storage, not home):
+Create `config/settings.local.json` with your own paths (gitignored, merges over `settings.json`):
 
 ```json
 {
-  "workspace_dir": "/cluster/project/beltrao/<your-username>/workspaces",
-  "logs_dir":      "/cluster/project/beltrao/<your-username>/logs",
+  "workspace_dir": "/cluster/project/<group>/<username>/workspaces",
+  "logs_dir":      "/cluster/project/<group>/<username>/logs",
   "image_path":    "/cluster/project/beltrao/jbuhmann/agentic_ai/images/euler-agents.sif"
 }
 ```
 
 ```bash
-mkdir -p /cluster/project/beltrao/<your-username>/{workspaces,logs}
+mkdir -p /cluster/project/<group>/<username>/{workspaces,logs}
 ```
 
 ### 2. Singularity image

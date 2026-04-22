@@ -58,6 +58,18 @@ SCRIPT_PATH=$(realpath "$0")
 REPO_DIR=$(dirname "$(dirname "$SCRIPT_PATH")")
 SETTINGS="$REPO_DIR/config/settings.json"
 
+SETTINGS_LOCAL="$REPO_DIR/config/settings.local.json"
+if [[ -f "$SETTINGS_LOCAL" ]]; then
+    _TMP=$(mktemp)
+    python3 -c "
+import json
+s = json.load(open('$SETTINGS'))
+s.update(json.load(open('$SETTINGS_LOCAL')))
+json.dump(s, open('$_TMP', 'w'))
+"
+    SETTINGS="$_TMP"
+fi
+
 _setting() {
     python3 -c "import json; s=json.load(open('$SETTINGS')); print($1)"
 }

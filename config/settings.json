@@ -1,6 +1,6 @@
 {
-  "workspace_dir": "/cluster/project/beltrao/jbuhmann/agentic_ai/workspaces",
-  "logs_dir": "/cluster/project/beltrao/jbuhmann/agentic_ai/logs",
+  "workspace_dir": "/cluster/project/<group>/<username>/workspaces",
+  "logs_dir": "/cluster/project/<group>/<username>/logs",
   "image_path": "/cluster/project/beltrao/jbuhmann/agentic_ai/images/euler-agents.sif",
   "slurm": {
     "time": "4:00:00",
