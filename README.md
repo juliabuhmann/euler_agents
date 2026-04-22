@@ -1,6 +1,27 @@
 # euler_agents
 
-Run AI coding agents (Codex, Claude) on the Euler HPC cluster via SLURM. Agents run inside a Singularity container, can clone repos and install conda packages, and write outputs to a persistent workspace on cluster storage.
+AI coding agents take time. A task like "refactor this module", "write tests for this codebase", or "analyse this dataset and produce a report" can run for minutes to hours. This repository lets you submit those tasks to the Euler HPC cluster as ordinary SLURM batch jobs — fire and forget, just like any compute job.
+
+You write a task in plain English. The agent (Codex or Claude) gets a compute node, a clean Singularity environment, and a persistent workspace on cluster storage. You come back to the results.
+
+```bash
+euler-agent-submit --agent claude \
+    --repo https://github.com/your-org/your-repo \
+    --project my-analysis \
+    --task "Explore the CSV files in data/, fit a linear regression, and write findings to results/report.md."
+```
+
+```bash
+squeue -u $USER                        # check it's running
+cat /path/to/workspaces/my-analysis/results/report.md   # read the output
+cat /path/to/workspaces/my-analysis/REPORT.md           # agent's own run summary + cost
+```
+
+**What you get:**
+- Tasks run unattended on a compute node — no keeping a terminal open, no babysitting
+- The agent can clone repos, install conda packages, read and write files freely
+- Named projects (`--project`) give the agent a persistent workspace across multiple jobs — useful for multi-step work where later tasks build on earlier results
+- Claude jobs record actual cost in `REPORT.md` so you know what each run spent
 
 ---
 
