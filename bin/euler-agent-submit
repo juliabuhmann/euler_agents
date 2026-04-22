@@ -2,8 +2,8 @@
 # User-facing entry point for submitting agent jobs.
 #
 # Usage:
-#   bin/submit [--agent codex|claude] [--task "prompt"] [--task-file FILE]
-#              [--repo URL] [--model MODEL] [--time HH:MM:SS] [--interactive]
+#   euler-agent-submit [--agent codex|claude] [--task "prompt"] [--task-file FILE]
+#                      [--repo URL] [--model MODEL] [--time HH:MM:SS] [--interactive]
 #
 # Without --task / --task-file, reads task from config/task.json.
 # --interactive opens a shell on a compute node (srun) instead of submitting via sbatch.
@@ -40,13 +40,13 @@ mkdir -p "$LOGS_DIR"
 
 if [[ "$INTERACTIVE" == true ]]; then
     echo "Starting interactive session on a compute node..."
-    echo "Agent launcher available at: $REPO_DIR/bin/run-agent"
+    echo "Agent launcher available at: $REPO_DIR/bin/euler-agent-run"
     srun \
         --time="$SLURM_TIME" \
         --mem-per-cpu="$SLURM_MEM" \
         --cpus-per-task="$SLURM_CPUS" \
         --pty \
-        "$REPO_DIR/bin/run-agent" --interactive "${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}"
+        "$REPO_DIR/bin/euler-agent-run" --interactive "${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}"
 else
     echo "Submitting SLURM job..."
     sbatch \

@@ -6,12 +6,19 @@ Run AI coding agents (Codex, Claude) on the Euler HPC cluster via SLURM. Agents 
 
 ## Setup
 
-### 1. Clone and configure
+### 1. Clone, configure, and install
 
 ```bash
 cd ~/src
 git clone <repo-url> euler_agents
 cd euler_agents
+make install   # symlinks CLIs to ~/.local/bin
+```
+
+Add `~/.local/bin` to your PATH if it isn't already (add to `~/.bashrc`):
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Edit `config/settings.json` — set your workspace and logs paths (use cluster project storage, not home):
@@ -68,7 +75,7 @@ exit
 Verify the full workflow (SLURM → Singularity → Codex → workspace):
 
 ```bash
-bin/submit --agent codex \
+euler-agent-submit --agent codex \
     --project harness-test \
     --task "Write the string 'hello from SLURM' to /workspace/hello.txt."
 ```
@@ -94,25 +101,25 @@ cat "$WORKSPACE/harness-test/REPORT.md"
 
 ```bash
 # One-off task (fresh timestamped workspace each run)
-bin/submit --agent codex --task "Add type annotations to all functions in src/"
+euler-agent-submit --agent codex --task "Add type annotations to all functions in src/"
 
 # Named project — workspace persists and is reused across jobs
-bin/submit --agent codex --project myanalysis --task "Clone the repo and explore the data"
-bin/submit --agent codex --project myanalysis --task "Now write a summary report"
+euler-agent-submit --agent codex --project myanalysis --task "Clone the repo and explore the data"
+euler-agent-submit --agent codex --project myanalysis --task "Now write a summary report"
 
 # Clone a repo into the workspace first
-bin/submit --agent codex --project myanalysis \
+euler-agent-submit --agent codex --project myanalysis \
     --repo https://github.com/org/myrepo \
     --task "Write unit tests for the data loading module"
 
 # Edit config/task.json and submit without extra flags
-bin/submit --agent codex
+euler-agent-submit --agent codex
 
 # Interactive shell on a compute node
-bin/submit --interactive --agent codex --project myanalysis
+euler-agent-submit --interactive --agent codex --project myanalysis
 
 # Override job time limit
-bin/submit --agent codex --task "..." --time 8:00:00
+euler-agent-submit --agent codex --task "..." --time 8:00:00
 ```
 
 The workspace is mounted as `/workspace` inside the container. Without `--project`, each run gets a fresh timestamped directory. With `--project`, all jobs for that project share the same directory — useful for multi-step work where later tasks build on earlier results.
@@ -125,18 +132,18 @@ Environments created by the agent persist in `<workspace>/conda_envs/` and are r
 
 ```bash
 # Create an environment
-bin/submit --agent codex --project myproject \
+euler-agent-submit --agent codex --project myproject \
     --task "Create a conda environment 'myenv' with python=3.11 and numpy, then verify with a short script."
 
 # Reuse it in a later job
-bin/submit --agent codex --project myproject \
+euler-agent-submit --agent codex --project myproject \
     --task "Using the conda environment 'myenv', write a script that prints the numpy version."
 ```
 
 To test an environment interactively:
 
 ```bash
-bin/submit --interactive --agent codex --project myproject
+euler-agent-submit --interactive --agent codex --project myproject
 # inside the shell:
 source /opt/conda/etc/profile.d/conda.sh && conda activate myenv
 ```
@@ -157,7 +164,7 @@ Claude Code (`--agent claude`) is an alternative to Codex with the same interfac
 
 **1. Get an Anthropic API key** at [console.anthropic.com](https://console.anthropic.com).
 
-**2. Make the key available to jobs** — write it to `config/secrets.env` (gitignored, auto-loaded by `bin/run-agent`):
+**2. Make the key available to jobs** — write it to `config/secrets.env` (gitignored, auto-loaded by `euler-agent-run`):
 
 ```bash
 echo "ANTHROPIC_API_KEY=sk-ant-..." > config/secrets.env
@@ -169,7 +176,7 @@ Alternatively, export it in your shell profile (`~/.bashrc`). The key is passed 
 **3. Smoke test** — verifies the full workflow including cost reporting:
 
 ```bash
-bin/submit --agent claude \
+euler-agent-submit --agent claude \
     --project harness-test \
     --model claude-haiku-4-5-20251001 \
     --max-budget-usd 0.10 \
@@ -195,8 +202,8 @@ cat "$WORKSPACE/harness-test/REPORT.md"   # should include a cost= field
 Priority order: CLI flag > `config/task.json` > `config/settings.json`.
 
 ```bash
-bin/submit --agent claude --max-budget-usd 3 --effort low --task "Quick exploration"
-bin/submit --agent claude --max-budget-usd 20 --effort high --task "Deep analysis"
+euler-agent-submit --agent claude --max-budget-usd 3 --effort low --task "Quick exploration"
+euler-agent-submit --agent claude --max-budget-usd 20 --effort high --task "Deep analysis"
 ```
 
 To change defaults for all Claude jobs, edit `config/settings.json`:

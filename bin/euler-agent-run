@@ -2,9 +2,9 @@
 # Host-side launcher: resolves config, sets up workspace and tmpdir, fires Singularity.
 # Called by slurm/run-agent.sh (inside a SLURM job) or directly for interactive use.
 #
-# Usage: bin/run-agent [--agent codex|claude] [--task "prompt"] [--task-file FILE]
-#                      [--repo URL] [--model MODEL] [--project NAME] [--interactive]
-#                      [--max-budget-usd N] [--effort low|medium|high|xhigh|max]
+# Usage: euler-agent-run [--agent codex|claude] [--task "prompt"] [--task-file FILE]
+#                        [--repo URL] [--model MODEL] [--project NAME] [--interactive]
+#                        [--max-budget-usd N] [--effort low|medium|high|xhigh|max]
 set -euo pipefail
 
 SCRIPT_PATH=$(realpath "$0")
