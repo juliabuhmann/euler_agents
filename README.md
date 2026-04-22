@@ -38,13 +38,13 @@ The agent runs inside a Singularity container with `--cleanenv --containall`. Wh
 
 What the sandbox does **not** protect against:
 
-- **Unrestricted execution.** Both agents run with all confirmation prompts disabled. Inside the container, the agent executes arbitrary shell commands and code without an approval step.
-- **Workspace mutations.** The agent has full write access to `/workspace`. It can delete or overwrite prior results in a named project. There is no undo.
-- **Outbound network.** The container has internet access. The agent can make HTTP requests, clone external repos, or call third-party APIs.
-- **API key exposure.** `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are injected as environment variables. A prompt-injection attack in a cloned repo could exfiltrate them. Keep keys scoped and rotate if in doubt.
-- **Cost overruns.** Codex has no spending cap. Claude defaults to `--max-budget-usd 10`; set it explicitly for expensive tasks.
+- **Unrestricted execution.** All confirmation prompts are disabled — the agent runs arbitrary code inside the container without approval.
+- **Workspace mutations.** Full write access to `/workspace`; it can delete prior results. No undo.
+- **Outbound network.** The container has internet access and can call external services.
+- **API key exposure.** Keys are injected as env vars and could be exfiltrated via prompt injection in a cloned repo.
+- **Cost overruns.** Codex has no spending cap. Set `--max-budget-usd` explicitly for Claude.
 
-The practical rule: treat anything you pass to the agent — repo content, task prompt, reference data — the way you would treat code you are about to `bash -c` on a compute node, because that is roughly what happens.
+Treat anything you pass to the agent the way you would treat code you are about to `bash -c` on a compute node.
 
 ---
 
@@ -134,9 +134,8 @@ tail -f /cluster/project/beltrao/<your-username>/logs/slurm-<jobid>.out
 After it finishes, verify the output:
 
 ```bash
-WORKSPACE=$(python3 -c "import json; print(json.load(open('config/settings.json'))['workspace_dir'])")
-cat "$WORKSPACE/harness-test/hello.txt"
-cat "$WORKSPACE/harness-test/REPORT.md"
+cat <workspace_dir>/harness-test/hello.txt
+cat <workspace_dir>/harness-test/REPORT.md
 ```
 
 ---
@@ -230,9 +229,8 @@ euler-agent-submit --agent claude \
 After the job finishes:
 
 ```bash
-WORKSPACE=$(python3 -c "import json; print(json.load(open('config/settings.json'))['workspace_dir'])")
-cat "$WORKSPACE/harness-test/hello.txt"
-cat "$WORKSPACE/harness-test/REPORT.md"   # should include a cost= field
+cat <workspace_dir>/harness-test/hello.txt
+cat <workspace_dir>/harness-test/REPORT.md   # should include a cost= field
 ```
 
 ### Controlling costs
