@@ -14,5 +14,13 @@
     "model": "claude-sonnet-4-6",
     "effort": null,
     "max_budget_usd": 10
+  },
+  "notifications": {
+    "email": {
+      "enabled": false,
+      "address": "",
+      "on_failure": true,
+      "on_success": false
+    }
   }
 }

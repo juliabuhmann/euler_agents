@@ -80,6 +80,7 @@ _setting() {
 
 WORKSPACE_DIR=$(_setting "s['workspace_dir']")
 IMAGE_PATH=$(_setting "s['image_path']")
+LOGS_DIR=$(_setting "s.get('logs_dir', s['workspace_dir'] + '/logs')")
 
 # Parse args
 AGENT="codex"
@@ -92,20 +93,23 @@ AGENT_EFFORT=""
 PROJECT=""
 REF_DIR=""
 INTERACTIVE=false
+NOTIFY_SUCCESS_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -h|--help)        usage; exit 0 ;;
-        --agent)          AGENT="$2";          shift 2 ;;
-        --task)           TASK="$2";           shift 2 ;;
-        --task-file)      TASK_FILE="$2";      shift 2 ;;
-        --repo)           REPO_URL="$2";       shift 2 ;;
-        --model)          MODEL="$2";          shift 2 ;;
-        --max-budget-usd) MAX_BUDGET_USD="$2"; shift 2 ;;
-        --effort)         AGENT_EFFORT="$2";   shift 2 ;;
-        --project)        PROJECT="$2";        shift 2 ;;
-        --ref)            REF_DIR="$2";        shift 2 ;;
-        --interactive)    INTERACTIVE=true;    shift ;;
+        -h|--help)           usage; exit 0 ;;
+        --agent)             AGENT="$2";               shift 2 ;;
+        --task)              TASK="$2";                shift 2 ;;
+        --task-file)         TASK_FILE="$2";           shift 2 ;;
+        --repo)              REPO_URL="$2";            shift 2 ;;
+        --model)             MODEL="$2";               shift 2 ;;
+        --max-budget-usd)    MAX_BUDGET_USD="$2";      shift 2 ;;
+        --effort)            AGENT_EFFORT="$2";        shift 2 ;;
+        --project)           PROJECT="$2";             shift 2 ;;
+        --ref)               REF_DIR="$2";             shift 2 ;;
+        --interactive)       INTERACTIVE=true;         shift ;;
+        --notify-success)    NOTIFY_SUCCESS_OVERRIDE="true";  shift ;;
+        --no-notify-success) NOTIFY_SUCCESS_OVERRIDE="false"; shift ;;
         *) echo "Unknown argument: $1" >&2; echo "Run with --help for usage." >&2; exit 1 ;;
     esac
 done
@@ -213,10 +217,29 @@ if [[ "$INTERACTIVE" == true ]]; then
         "${SING_BINDS[@]}" \
         "$IMAGE_PATH"
 else
+    AGENT_EXIT=0
     singularity exec \
         --cleanenv --containall \
         "${SING_ENV[@]}" \
         "${SING_BINDS[@]}" \
         "$IMAGE_PATH" \
-        /repo/bin/inner.sh
+        /repo/bin/inner.sh || AGENT_EXIT=$?
+
+    NOTIFY_EMAIL_ENABLED=$(_setting "str(s.get('notifications', {}).get('email', {}).get('enabled', False)).lower()")
+    NOTIFY_EMAIL_ADDRESS=$(_setting "s.get('notifications', {}).get('email', {}).get('address', '')")
+    NOTIFY_ON_FAILURE=$(_setting "str(s.get('notifications', {}).get('email', {}).get('on_failure', True)).lower()")
+    NOTIFY_ON_SUCCESS_CFG=$(_setting "str(s.get('notifications', {}).get('email', {}).get('on_success', False)).lower()")
+    NOTIFY_ON_SUCCESS="${NOTIFY_SUCCESS_OVERRIDE:-$NOTIFY_ON_SUCCESS_CFG}"
+
+    NOTIFY_EMAIL_ENABLED="$NOTIFY_EMAIL_ENABLED" \
+    NOTIFY_EMAIL_ADDRESS="$NOTIFY_EMAIL_ADDRESS" \
+    NOTIFY_ON_FAILURE="$NOTIFY_ON_FAILURE" \
+    NOTIFY_ON_SUCCESS="$NOTIFY_ON_SUCCESS" \
+    LOGS_DIR="$LOGS_DIR" \
+    "$REPO_DIR/bin/notify.sh" \
+        --exit-code "$AGENT_EXIT" \
+        --workspace "$RUN_WORKSPACE" \
+        --agent "$AGENT" || true
+
+    exit "$AGENT_EXIT"
 fi

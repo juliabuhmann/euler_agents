@@ -259,3 +259,37 @@ After each run the actual cost is recorded in the workspace `REPORT.md`:
 ```
 ## Run 2026-04-21T12:00:00Z  (job=12345  model=claude-sonnet-4-6  exit=0  cost=$1.2340)
 ```
+
+---
+
+## Notifications (optional)
+
+Get notified by email when a job fails or completes. Disabled by default — opt in via `config/settings.local.json`:
+
+```json
+{
+  "notifications": {
+    "email": {
+      "enabled": true,
+      "address": "you@ethz.ch",
+      "on_failure": true,
+      "on_success": false
+    }
+  }
+}
+```
+
+`on_failure` notifies when the agent exits with a non-zero code. `on_success` notifies on clean completion — useful for long jobs where you want to know the moment they finish, but noisy if you run many jobs in parallel.
+
+Failure emails include the last lines of the error log and a summary from `REPORT.md`. Success emails include the agent summary from `REPORT.md` and the cost.
+
+**Toggle success notifications for a single run** without editing the config:
+
+```bash
+euler-agent-submit --agent claude --task "..." --notify-success      # on for this run
+euler-agent-submit --agent claude --task "..." --no-notify-success   # off for this run
+```
+
+> **Note:** Email is sent via `/usr/sbin/sendmail` (Postfix relay on the compute node). ETH addresses (`@ethz.ch`) work reliably. External addresses depend on the ETH relay policy.
+
+<!-- TODO: Slack and Telegram webhook support -->
