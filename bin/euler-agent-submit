@@ -82,6 +82,8 @@ SLURM_MEM=$(_setting "s.get('slurm', {}).get('mem_per_cpu', '8G')")
 SLURM_CPUS=$(_setting "s.get('slurm', {}).get('cpus', 2)")
 
 INTERACTIVE=false
+GPU=false
+GPU_TYPE="a100"
 OVERRIDE_TIME=""
 PASSTHROUGH=()
 
@@ -89,12 +91,22 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --interactive) INTERACTIVE=true; shift ;;
+        --gpu) GPU=true; PASSTHROUGH+=("$1"); shift ;;
+        --gpu-type) GPU_TYPE="$2"; PASSTHROUGH+=("$1" "$2"); shift 2 ;;
         --time) OVERRIDE_TIME="$2"; shift 2 ;;
         *) PASSTHROUGH+=("$1"); shift ;;
     esac
 done
 
 [[ -n "$OVERRIDE_TIME" ]] && SLURM_TIME="$OVERRIDE_TIME"
+
+# GPU jobs need more time and a GPU partition by default
+if [[ "$GPU" == true ]]; then
+    [[ -z "$OVERRIDE_TIME" ]] && SLURM_TIME="4:00:00"
+    GPU_SLURM_ARGS=(--gpus=${GPU_TYPE}:1 -p gpupr.24h --tmp=200G)
+else
+    GPU_SLURM_ARGS=()
+fi
 
 mkdir -p "$LOGS_DIR"
 
@@ -105,11 +117,13 @@ if [[ "$INTERACTIVE" == true ]]; then
         --time="$SLURM_TIME" \
         --mem-per-cpu="$SLURM_MEM" \
         --cpus-per-task="$SLURM_CPUS" \
+        "${GPU_SLURM_ARGS[@]+"${GPU_SLURM_ARGS[@]}"}" \
         --pty \
         "$REPO_DIR/bin/euler-agent-run" --interactive "${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}"
 else
     echo "Submitting SLURM job..."
     sbatch \
+        "${GPU_SLURM_ARGS[@]+"${GPU_SLURM_ARGS[@]}"}" \
         --export=ALL,EULER_AGENTS_DIR="$REPO_DIR" \
         --output="$LOGS_DIR/slurm-%j.out" \
         --error="$LOGS_DIR/slurm-%j.err" \

@@ -93,6 +93,7 @@ AGENT_EFFORT=""
 PROJECT=""
 REF_DIR=""
 INTERACTIVE=false
+GPU=false
 NOTIFY_SUCCESS_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
@@ -107,6 +108,8 @@ while [[ $# -gt 0 ]]; do
         --effort)            AGENT_EFFORT="$2";        shift 2 ;;
         --project)           PROJECT="$2";             shift 2 ;;
         --ref)               REF_DIR="$2";             shift 2 ;;
+        --gpu)               GPU=true;                 shift ;;
+        --gpu-type)          shift 2 ;;  # consumed by euler-agent-submit, ignored here
         --interactive)       INTERACTIVE=true;         shift ;;
         --notify-success)    NOTIFY_SUCCESS_OVERRIDE="true";  shift ;;
         --no-notify-success) NOTIFY_SUCCESS_OVERRIDE="false"; shift ;;
@@ -207,12 +210,16 @@ SING_BINDS=(
 )
 [[ -n "$REF_DIR" ]] && SING_BINDS+=(--bind "$REF_DIR:/reference:ro")
 
+NV_FLAG=()
+[[ "$GPU" == true ]] && NV_FLAG=(--nv)
+
 if [[ "$INTERACTIVE" == true ]]; then
     echo "Opening interactive shell inside container..."
     echo "  Workspace: /workspace  (persists at $RUN_WORKSPACE)"
-    echo "  Run codex manually or explore the environment."
+    [[ "$GPU" == true ]] && echo "  GPU mode enabled (--nv)"
     singularity shell \
         --cleanenv --containall \
+        "${NV_FLAG[@]+"${NV_FLAG[@]}"}" \
         "${SING_ENV[@]}" \
         "${SING_BINDS[@]}" \
         "$IMAGE_PATH"
@@ -220,6 +227,7 @@ else
     AGENT_EXIT=0
     singularity exec \
         --cleanenv --containall \
+        "${NV_FLAG[@]+"${NV_FLAG[@]}"}" \
         "${SING_ENV[@]}" \
         "${SING_BINDS[@]}" \
         "$IMAGE_PATH" \
