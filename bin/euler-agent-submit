@@ -4,6 +4,7 @@
 # Usage:
 #   euler-agent-submit [--agent codex|claude] [--task "prompt"] [--task-file FILE]
 #                      [--repo URL] [--model MODEL] [--time HH:MM:SS] [--interactive]
+#                      [--gpu] [--gpu-type TYPE] [--partition NAME]
 #
 # Without --task / --task-file, reads task from config/task.json.
 # --interactive opens a shell on a compute node (srun) instead of submitting via sbatch.
@@ -26,6 +27,10 @@ OPTIONS
   --interactive           Open a shell on a compute node via srun instead of sbatch
   --notify-success        Send a notification email on success (overrides config)
   --no-notify-success     Suppress success notification for this run (overrides config)
+  --gpu                   Request a GPU node (adds --gpus, --tmp=50G, sets GPU partition)
+  --gpu-type TYPE         GPU type to request (default: a100)
+  --partition NAME        Override the SLURM partition (default: auto-selected from --time:
+                            ≤4h → gpupr.4h, ≤24h → gpupr.24h, else → gpupr.120h)
   -h, --help              Show this help
 
 Without --task / --task-file, reads the task from config/task.json.
@@ -84,6 +89,7 @@ SLURM_CPUS=$(_setting "s.get('slurm', {}).get('cpus', 2)")
 INTERACTIVE=false
 GPU=false
 GPU_TYPE="a100"
+GPU_PARTITION_OVERRIDE=""
 OVERRIDE_TIME=""
 PASSTHROUGH=()
 
@@ -93,6 +99,7 @@ while [[ $# -gt 0 ]]; do
         --interactive) INTERACTIVE=true; shift ;;
         --gpu) GPU=true; PASSTHROUGH+=("$1"); shift ;;
         --gpu-type) GPU_TYPE="$2"; PASSTHROUGH+=("$1" "$2"); shift 2 ;;
+        --partition) GPU_PARTITION_OVERRIDE="$2"; shift 2 ;;
         --time) OVERRIDE_TIME="$2"; shift 2 ;;
         *) PASSTHROUGH+=("$1"); shift ;;
     esac
@@ -100,10 +107,53 @@ done
 
 [[ -n "$OVERRIDE_TIME" ]] && SLURM_TIME="$OVERRIDE_TIME"
 
-# GPU jobs need more time and a GPU partition by default
+# GPU jobs: pick gpupr partition based on requested time
+_time_to_hours() {
+    local time_str="$1"
+    if [[ "$time_str" =~ ^([0-9]+)-([0-9]+):([0-9]+):([0-9]+)$ ]]; then
+        echo $(( ${BASH_REMATCH[1]}*24 + ${BASH_REMATCH[2]} ))
+    elif [[ "$time_str" =~ ^([0-9]+):([0-9]+):([0-9]+)$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+    else
+        echo 4
+    fi
+}
+
+_gpu_partition() {
+    local hours; hours=$(_time_to_hours "$1")
+    if (( hours <= 4 )); then echo "gpupr.4h"
+    elif (( hours <= 24 )); then echo "gpupr.24h"
+    else echo "gpupr.120h"
+    fi
+}
+
+# Known max hours per partition name (suffix-based for gpupr/gpu/gpuhe families)
+_partition_max_hours() {
+    case "$1" in
+        *.4h)   echo 4   ;;
+        *.24h)  echo 24  ;;
+        *.120h) echo 120 ;;
+        *.bulk) echo 360 ;;
+        *)      echo ""  ;;  # unknown — skip check
+    esac
+}
+
 if [[ "$GPU" == true ]]; then
     [[ -z "$OVERRIDE_TIME" ]] && SLURM_TIME="4:00:00"
-    GPU_SLURM_ARGS=(--gpus=${GPU_TYPE}:1 -p gpupr.4h --tmp=50G)
+    if [[ -n "$GPU_PARTITION_OVERRIDE" ]]; then
+        GPU_PARTITION="$GPU_PARTITION_OVERRIDE"
+        _max=$(_partition_max_hours "$GPU_PARTITION")
+        if [[ -n "$_max" ]]; then
+            _requested=$(_time_to_hours "$SLURM_TIME")
+            if (( _requested > _max )); then
+                echo "WARNING: requested time ${SLURM_TIME} (${_requested}h) exceeds the" \
+                     "max for partition ${GPU_PARTITION} (${_max}h) — SLURM will likely reject this job." >&2
+            fi
+        fi
+    else
+        GPU_PARTITION=$(_gpu_partition "$SLURM_TIME")
+    fi
+    GPU_SLURM_ARGS=(--gpus=${GPU_TYPE}:1 -p ${GPU_PARTITION} --tmp=50G)
 else
     GPU_SLURM_ARGS=()
 fi
