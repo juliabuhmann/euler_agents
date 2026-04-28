@@ -103,7 +103,7 @@ done
 # GPU jobs need more time and a GPU partition by default
 if [[ "$GPU" == true ]]; then
     [[ -z "$OVERRIDE_TIME" ]] && SLURM_TIME="4:00:00"
-    GPU_SLURM_ARGS=(--gpus=${GPU_TYPE}:1 -p gpupr.24h --tmp=200G)
+    GPU_SLURM_ARGS=(--gpus=${GPU_TYPE}:1 -p gpupr.4h --tmp=50G)
 else
     GPU_SLURM_ARGS=()
 fi
@@ -121,12 +121,13 @@ if [[ "$INTERACTIVE" == true ]]; then
         --pty \
         "$REPO_DIR/bin/euler-agent-run" --interactive "${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}"
 else
-    echo "Submitting SLURM job..."
-    sbatch \
-        "${GPU_SLURM_ARGS[@]+"${GPU_SLURM_ARGS[@]}"}" \
-        --export=ALL,EULER_AGENTS_DIR="$REPO_DIR" \
-        --output="$LOGS_DIR/slurm-%j.out" \
-        --error="$LOGS_DIR/slurm-%j.err" \
-        "$REPO_DIR/slurm/run-agent.sh" \
-        "${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}"
+    SBATCH_CMD=(sbatch
+        "${GPU_SLURM_ARGS[@]+"${GPU_SLURM_ARGS[@]}"}"
+        --export=ALL,EULER_AGENTS_DIR="$REPO_DIR"
+        --output="$LOGS_DIR/slurm-%j.out"
+        --error="$LOGS_DIR/slurm-%j.err"
+        "$REPO_DIR/slurm/run-agent.sh"
+        "${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}")
+    echo "Submitting: ${SBATCH_CMD[*]}"
+    "${SBATCH_CMD[@]}"
 fi

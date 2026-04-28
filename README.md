@@ -196,7 +196,7 @@ source /opt/conda/etc/profile.d/conda.sh && conda activate myenv
 Pass `--gpu` to request a GPU node and enable NVIDIA GPU access inside the container:
 
 ```bash
-# Submit a GPU job (defaults to one A100, gpupr.24h partition, 4h time limit)
+# Submit a GPU job (defaults to one A100, gpupr.4h partition, 4h time limit)
 euler-agent-submit --agent claude --gpu --project mygpuproject \
     --task "Train the model in train.py and save checkpoints to /workspace/checkpoints/"
 
@@ -208,7 +208,7 @@ euler-agent-submit --agent claude --gpu --gpu-type rtx3090 --project mygpuprojec
 euler-agent-submit --interactive --gpu --agent claude --project mygpuproject
 ```
 
-`--gpu` automatically sets `--gpus=<type>:1`, `-p gpupr.24h`, `--tmp=200G`, and a 4-hour time limit. Override the time limit with `--time` as usual. `--gpu-type` defaults to `a100`.
+`--gpu` automatically sets `--gpus=<type>:1`, `-p gpupr.4h`, `--tmp=50G`, and a 4-hour time limit. Override the time limit with `--time` as usual. `--gpu-type` defaults to `a100`.
 
 ---
 
