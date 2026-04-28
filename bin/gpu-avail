@@ -1,0 +1,42 @@
+#!/bin/bash
+# Print GPU availability per type on Euler
+# Usage: gpu_avail.sh [--a100]
+
+FILTER="gpu:"
+if [[ "$1" == "--a100" ]]; then
+    FILTER="a100"
+fi
+
+sinfo --Format="nodelist:60,gres:120,gresused:80" --noheader \
+| grep "$FILTER" \
+| awk '
+{
+    nodegroup = substr($0, 1, 60)
+    gres      = substr($0, 61, 120)
+    gresused  = substr($0, 181, 80)
+
+    sub(/[[:space:]]+$/, "", nodegroup)
+
+    if (!match(gres, /gpu:([^:,(]+):([0-9]+)/, g)) next
+    gpu_type = g[1]; total = g[2] + 0
+
+    alloc = 0
+    if (match(gresused, /gpu:[^:]+:([0-9]+)/, a)) alloc = a[1] + 0
+
+    free = total - alloc
+    print gpu_type, nodegroup, "total=" total, "alloc=" alloc, "free=" free
+}
+' \
+| sort \
+| awk '
+    BEGIN { prev="" }
+    {
+        if ($1 != prev) {
+            if (prev != "") print ""
+            print "=== " $1 " ==="
+            prev = $1
+        }
+        print "  " $2 ": " $3 " " $4 " " $5
+    }
+    END { print "" }
+'
