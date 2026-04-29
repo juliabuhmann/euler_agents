@@ -218,6 +218,28 @@ euler-agent-submit --interactive --gpu --agent claude --project mygpuproject
 
 `--gpu` sets `--gpus=<type>:1`, `--tmp=50G`, and a 4-hour default time limit. The SLURM partition is auto-selected from the `gpupr.*` family based on the requested time (≤4h → `gpupr.4h`, ≤24h → `gpupr.24h`, longer → `gpupr.120h`). Override with `--partition` to use a specific partition (e.g. `gpu.24h` for the general queue). `--gpu-type` defaults to `a100`.
 
+### Default Slurm account and GPU availability
+
+If GPU jobs queue for a long time or never start, check which account they are submitted under — the default account may have a much smaller GPU share than expected. On the Beltrao group setup, the system default is `es_beltrao` (4 GPUs), not `es_biol` (61 GPUs).
+
+Check your current default:
+
+```bash
+my_share_info
+```
+
+Change the default to the larger share permanently:
+
+```bash
+mkdir -p ~/.slurm && echo "account=es_biol" > ~/.slurm/defaults
+```
+
+Verify which account a submitted job is actually using (use `%.30a` to avoid truncation):
+
+```bash
+squeue -j <jobid> -o "%.18i %.30a"
+```
+
 ---
 
 ## Claude agent (optional)
