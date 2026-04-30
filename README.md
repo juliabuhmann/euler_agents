@@ -311,6 +311,84 @@ After each run the actual cost is recorded in the workspace `REPORT.md`:
 
 ---
 
+## GitHub access (optional)
+
+By default the agent has no GitHub credentials — it can clone public repos anonymously but cannot push, commit to private repos, or open pull requests. Add `--github-auth` when the task requires any of these.
+
+### When to use it
+
+```bash
+# Clone a private repo and push changes back
+euler-agent-submit --agent claude --github-auth \
+    --repo https://github.com/your-org/private-repo \
+    --project myproject \
+    --task "Refactor the data loader, commit, and push the changes to a new branch."
+
+# Push results or open a PR (repo already cloned in workspace)
+euler-agent-submit --agent claude --github-auth \
+    --project myproject \
+    --task "Create a branch results/run-42, write a summary to results.md, commit and push it."
+
+# Works identically for Codex
+euler-agent-submit --agent codex --github-auth \
+    --repo https://github.com/your-org/private-repo \
+    --project myproject \
+    --task "Add type annotations to src/ and push the changes."
+```
+
+What `--github-auth` enables inside the container:
+- Authenticated clone, fetch, push, pull for all `https://github.com/` URLs (public and private)
+- Commits are attributed to the identity in `GIT_USER_NAME` / `GIT_USER_EMAIL`
+- Every commit is automatically tagged with a `Co-Authored-By` trailer identifying the agent and model
+
+### Setup
+
+**1. Create a fine-grained PAT** at [github.com/settings/tokens](https://github.com/settings/tokens).
+Required permissions: **Contents** (read/write), **Pull requests** (read/write).
+
+**2. Add credentials to `config/secrets.local.env`** (gitignored, auto-loaded):
+
+```bash
+cat >> config/secrets.local.env <<'EOF'
+GITHUB_TOKEN=github_pat_...
+GIT_USER_NAME="Your Name"
+GIT_USER_EMAIL="you@example.com"
+EOF
+chmod 600 config/secrets.local.env
+```
+
+That's it. No changes to the Singularity image are needed.
+
+### Quick test
+
+**Via `euler-agent-run`** (runs directly on the current node, no SLURM):
+
+```bash
+euler-agent-run --agent claude --github-auth \
+    --repo https://github.com/your-org/sandbox \
+    --project github-auth-test \
+    --task "Create a branch test/github-auth-$(date +%Y%m%d), add hello.txt with 'euler-agents git auth test', commit and push it."
+```
+
+**Via `euler-agent-submit`** (submits to SLURM):
+
+```bash
+euler-agent-submit --agent claude --github-auth \
+    --repo https://github.com/your-org/sandbox \
+    --project github-auth-test \
+    --task "Create a branch test/github-auth-$(date +%Y%m%d), add hello.txt with 'euler-agents git auth test', commit and push it."
+```
+
+After the job finishes, check GitHub — the branch should exist and the commit should show one of:
+
+```
+Co-Authored-By: Claude (claude-sonnet-4-6) <noreply@anthropic.com>
+Co-Authored-By: Codex (gpt-5.4) <noreply@openai.com>
+```
+
+
+---
+
 ## Notifications (optional)
 
 Get notified by email when a job fails or completes. Disabled by default — opt in via `config/settings.local.json`:

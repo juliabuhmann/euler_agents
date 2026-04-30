@@ -10,6 +10,7 @@ mkdir -p /workspace/conda_envs /tmp/conda_pkgs
 
 AGENT="${AGENT:?AGENT env var not set}"
 REPO_URL="${REPO_URL:-}"
+GIT_AUTH="${GIT_AUTH:-}"
 MODEL="${AGENT_MODEL:-}"
 MAX_BUDGET_USD="${AGENT_MAX_BUDGET_USD:-}"
 AGENT_EFFORT="${AGENT_EFFORT:-}"
@@ -28,8 +29,18 @@ After completing the above task, write a concise summary (max 20 lines) to /tmp/
 
 cd /workspace
 
+git config --global core.hooksPath /repo/config/git-hooks
+
+if [[ "$GIT_AUTH" == "true" ]]; then
+    git config --global user.name  "$GIT_USER_NAME"
+    git config --global user.email "$GIT_USER_EMAIL"
+    git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+    echo "=== GitHub auth configured for ${GIT_USER_NAME} <${GIT_USER_EMAIL}> ==="
+fi
+
 if [[ -n "$REPO_URL" ]]; then
     REPO_NAME=$(basename "$REPO_URL" .git)
+    [[ -d "$REPO_NAME" ]] && rm -rf "$REPO_NAME"
     echo "=== Cloning $REPO_URL ==="
     git clone "$REPO_URL" "$REPO_NAME"
     cd "$REPO_NAME"

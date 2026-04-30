@@ -29,6 +29,10 @@ OPTIONS
   --effort low|medium|high|xhigh|max
                               Thinking depth (Claude only)
   --ref DIR                   Bind a reference directory to /reference inside the container
+  --github-auth               Inject GitHub credentials into the container so the agent can
+                              clone private repos, commit, push, and open PRs. Requires
+                              GITHUB_TOKEN, GIT_USER_NAME, GIT_USER_EMAIL in
+                              config/secrets.local.env. Off by default.
   --interactive               Open an interactive shell inside the container instead of running
   -h, --help                  Show this help
 
@@ -94,6 +98,7 @@ PROJECT=""
 REF_DIR=""
 INTERACTIVE=false
 GPU=false
+GITHUB_AUTH=false
 NOTIFY_SUCCESS_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
@@ -108,6 +113,7 @@ while [[ $# -gt 0 ]]; do
         --effort)            AGENT_EFFORT="$2";        shift 2 ;;
         --project)           PROJECT="$2";             shift 2 ;;
         --ref)               REF_DIR="$2";             shift 2 ;;
+        --github-auth)       GITHUB_AUTH=true;         shift ;;
         --gpu)               GPU=true;                 shift ;;
         --gpu-type)          shift 2 ;;  # consumed by euler-agent-submit, ignored here
         --interactive)       INTERACTIVE=true;         shift ;;
@@ -157,11 +163,16 @@ fi
 [[ -z "$MAX_BUDGET_USD" ]] && MAX_BUDGET_USD=$(_agent_setting max_budget_usd)
 [[ -z "$AGENT_EFFORT"   ]] && AGENT_EFFORT=$(_agent_setting effort)
 
-# Load API credentials from secrets.env if present (gitignored)
+# Load API credentials (secrets.env is the template; secrets.local.env holds real values)
 SECRETS="$REPO_DIR/config/secrets.env"
 [[ -f "$SECRETS" ]] && source "$SECRETS"
+SECRETS_LOCAL="$REPO_DIR/config/secrets.local.env"
+[[ -f "$SECRETS_LOCAL" ]] && source "$SECRETS_LOCAL"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+GIT_USER_NAME="${GIT_USER_NAME:-}"
+GIT_USER_EMAIL="${GIT_USER_EMAIL:-}"
 
 # Resolve workspace: named project (persistent, reused) or timestamped (one-off)
 if [[ -n "$PROJECT" ]]; then
@@ -198,9 +209,18 @@ SING_ENV=(
     --env "CONDA_ENVS_DIRS=/workspace/conda_envs:/opt/conda/envs"
     --env "CONDA_PKGS_DIRS=/tmp/conda_pkgs"
 )
-[[ -n "$OPENAI_API_KEY" ]] && SING_ENV+=(--env "OPENAI_API_KEY=$OPENAI_API_KEY")
+[[ -n "$OPENAI_API_KEY" ]]   && SING_ENV+=(--env "OPENAI_API_KEY=$OPENAI_API_KEY")
 [[ -n "$ANTHROPIC_API_KEY" ]] && SING_ENV+=(--env "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
 [[ -n "${SLURM_JOB_ID:-}" ]] && SING_ENV+=(--env "SLURM_JOB_ID=$SLURM_JOB_ID")
+if [[ "$GITHUB_AUTH" == true ]]; then
+    [[ -z "$GITHUB_TOKEN" ]] && { echo "ERROR: --github-auth requires GITHUB_TOKEN in secrets.local.env" >&2; exit 1; }
+    SING_ENV+=(
+        --env "GIT_AUTH=true"
+        --env "GITHUB_TOKEN=$GITHUB_TOKEN"
+        --env "GIT_USER_NAME=${GIT_USER_NAME:-euler-agent}"
+        --env "GIT_USER_EMAIL=${GIT_USER_EMAIL:-euler-agent@localhost}"
+    )
+fi
 
 SING_BINDS=(
     --home "$JOB_HOME:/home"

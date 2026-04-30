@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Appends a Co-Authored-By trailer identifying the AI agent that made the commit.
+# Reads AGENT and AGENT_MODEL from the container environment (set by euler-agent-run).
+set -euo pipefail
+
+COMMIT_MSG_FILE="$1"
+AGENT="${AGENT:-unknown}"
+MODEL="${AGENT_MODEL:-unknown}"
+
+case "$AGENT" in
+    claude) AUTHOR="Claude";  EMAIL="noreply@anthropic.com" ;;
+    codex)  AUTHOR="Codex";   EMAIL="noreply@openai.com"    ;;
+    *)      AUTHOR="$AGENT";  EMAIL="noreply@euler-agents"  ;;
+esac
+
+TRAILER="Co-Authored-By: ${AUTHOR} (${MODEL}) <${EMAIL}>"
+
+# Idempotent: skip if already present
+grep -qF "$TRAILER" "$COMMIT_MSG_FILE" && exit 0
+
+# Git trailer convention: ensure a blank line before the trailer block
+if [[ -n "$(tail -1 "$COMMIT_MSG_FILE")" ]]; then
+    echo "" >> "$COMMIT_MSG_FILE"
+fi
+
+echo "$TRAILER" >> "$COMMIT_MSG_FILE"

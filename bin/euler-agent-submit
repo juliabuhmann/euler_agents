@@ -31,6 +31,10 @@ OPTIONS
   --gpu-type TYPE         GPU type to request (default: a100)
   --partition NAME        Override the SLURM partition (default: auto-selected from --time:
                             ≤4h → gpupr.4h, ≤24h → gpupr.24h, else → gpupr.120h)
+  --github-auth           Inject GitHub credentials into the container (requires GITHUB_TOKEN,
+                            GIT_USER_NAME, GIT_USER_EMAIL in config/secrets.local.env).
+                            Off by default — enable only when the agent needs to clone private
+                            repos, commit, push, or open PRs.
   -h, --help              Show this help
 
 Without --task / --task-file, reads the task from config/task.json.
@@ -101,6 +105,7 @@ while [[ $# -gt 0 ]]; do
         --gpu-type) GPU_TYPE="$2"; PASSTHROUGH+=("$1" "$2"); shift 2 ;;
         --partition) GPU_PARTITION_OVERRIDE="$2"; shift 2 ;;
         --time) OVERRIDE_TIME="$2"; shift 2 ;;
+        --github-auth) PASSTHROUGH+=("$1"); shift ;;
         *) PASSTHROUGH+=("$1"); shift ;;
     esac
 done

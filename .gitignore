@@ -1,5 +1,6 @@
 home-codex/
 home-claude/
 config/secrets.env
+config/secrets.local.env
 config/settings.local.json
 .claude/settings.local.json
