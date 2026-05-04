@@ -196,27 +196,46 @@ source /opt/conda/etc/profile.d/conda.sh && conda activate myenv
 Pass `--gpu` to request a GPU node and enable NVIDIA GPU access inside the container:
 
 ```bash
-# Submit a GPU job (defaults to one A100, gpupr.4h partition, 4h time limit)
+# Any A100 (scheduler picks 40 or 80 GB — tends to give 40 GB when available)
 euler-agent-submit --agent claude --gpu --project mygpuproject \
     --task "Train the model in train.py and save checkpoints to /workspace/checkpoints/"
 
-# Longer job — partition is auto-selected (6h → gpupr.24h)
+# A100 40 GB explicitly
+euler-agent-submit --agent claude --gpu \
+    --gpu-type nvidia_a100-pcie-40gb --gpu-mem 40g \
+    --project mygpuproject --task "..."
+
+# A100 80 GB explicitly
+euler-agent-submit --agent claude --gpu \
+    --gpu-type nvidia_a100_80gb_pcie --gpu-mem 80g \
+    --project mygpuproject --task "..."
+
+# RTX Pro 6000 Blackwell (96 GB) — note: different partition family
+euler-agent-submit --agent claude --gpu \
+    --gpu-type nvidia_rtx_pro_6000 --gpu-mem 96g --partition cuda13pr.4h \
+    --project mygpuproject --task "..."
+
+# Longer job — partition is auto-selected from time (6h → gpupr.24h)
 euler-agent-submit --agent claude --gpu --time 6:00:00 --project mygpuproject \
     --task "Run the full training pipeline"
-
-# Select a different GPU type
-euler-agent-submit --agent claude --gpu --gpu-type rtx3090 --project mygpuproject \
-    --task "Run inference and write results to /workspace/results.json"
-
-# Hard-code a specific partition (overrides auto-selection)
-euler-agent-submit --agent claude --gpu --partition gpu.24h --project mygpuproject \
-    --task "..."
 
 # Interactive GPU shell
 euler-agent-submit --interactive --gpu --agent claude --project mygpuproject
 ```
 
-`--gpu` sets `--gpus=<type>:1`, `--tmp=50G`, and a 4-hour default time limit. The SLURM partition is auto-selected from the `gpupr.*` family based on the requested time (≤4h → `gpupr.4h`, ≤24h → `gpupr.24h`, longer → `gpupr.120h`). Override with `--partition` to use a specific partition (e.g. `gpu.24h` for the general queue). `--gpu-type` defaults to `a100`.
+`--gpu` sets `--gpus=<type>:1`, `--tmp=50G`, and a 4-hour default time limit. The SLURM partition is auto-selected from the `gpupr.*` family based on the requested time (≤4h → `gpupr.4h`, ≤24h → `gpupr.24h`, longer → `gpupr.120h`). The RTX Pro 6000 is in the `cuda13pr.*` family instead — use `--partition cuda13pr.4h` explicitly for that GPU.
+
+**Important:** on Euler, `--gpu-type` alone does not enforce which GPU you get — the scheduler ignores the type name and assigns any available GPU. Always pair it with `--gpu-mem SIZE` to filter by VRAM. Known GPU types and their `--gpu-mem` values:
+
+| GPU | `--gpu-type` | `--gpu-mem` | Partition |
+|---|---|---|---|
+| A100 40 GB | `nvidia_a100-pcie-40gb` | `40g` | `gpupr.*` |
+| A100 80 GB | `nvidia_a100_80gb_pcie` | `80g` | `gpupr.*` |
+| RTX Pro 6000 (96 GB) | `nvidia_rtx_pro_6000` | `96g` | `cuda13pr.*` |
+| RTX 4090 (24 GB) | `nvidia_geforce_rtx_4090` | `24g` | `gpupr.*` |
+| RTX 3090 (24 GB) | `nvidia_geforce_rtx_3090` | `24g` | `gpupr.*` |
+
+Note: the 40 GB A100 GRES name uses hyphens (`a100-pcie-40gb`), the 80 GB uses underscores (`a100_80gb_pcie`) — an Euler inconsistency.
 
 ### Default Slurm account and GPU availability
 

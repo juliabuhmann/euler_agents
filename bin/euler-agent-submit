@@ -28,7 +28,17 @@ OPTIONS
   --notify-success        Send a notification email on success (overrides config)
   --no-notify-success     Suppress success notification for this run (overrides config)
   --gpu                   Request a GPU node (adds --gpus, --tmp=50G, sets GPU partition)
-  --gpu-type TYPE         GPU type to request (default: a100)
+  --gpu-type TYPE         GPU type to request (default: a100). Known types on Euler:
+                            a100                    — any A100 (40 or 80 GB)
+                            nvidia_a100_80gb_pcie   — A100 80 GB (use with --gpu-mem 80g)
+                            nvidia_rtx_pro_6000     — RTX Pro 6000 Blackwell 96 GB
+                            nvidia_geforce_rtx_4090 — RTX 4090 24 GB
+                            nvidia_geforce_rtx_3090 — RTX 3090 24 GB
+  --gpu-mem SIZE          GPU memory filter, e.g. 80g or 96g. Adds --gres=gpumem:SIZE
+                            to the sbatch call so the scheduler picks a node with at
+                            least that much GPU VRAM. Use this to distinguish 40 GB vs
+                            80 GB A100s, or to target RTX Pro 6000 (96g). On Euler,
+                            --gpu-type alone does not enforce memory — this flag does.
   --partition NAME        Override the SLURM partition (default: auto-selected from --time:
                             ≤4h → gpupr.4h, ≤24h → gpupr.24h, else → gpupr.120h)
   --github-auth           Inject GitHub credentials into the container (requires GITHUB_TOKEN,
@@ -93,6 +103,7 @@ SLURM_CPUS=$(_setting "s.get('slurm', {}).get('cpus', 2)")
 INTERACTIVE=false
 GPU=false
 GPU_TYPE="a100"
+GPU_MEM=""
 GPU_PARTITION_OVERRIDE=""
 OVERRIDE_TIME=""
 PASSTHROUGH=()
@@ -103,6 +114,7 @@ while [[ $# -gt 0 ]]; do
         --interactive) INTERACTIVE=true; shift ;;
         --gpu) GPU=true; PASSTHROUGH+=("$1"); shift ;;
         --gpu-type) GPU_TYPE="$2"; PASSTHROUGH+=("$1" "$2"); shift 2 ;;
+        --gpu-mem) GPU_MEM="$2"; shift 2 ;;
         --partition) GPU_PARTITION_OVERRIDE="$2"; shift 2 ;;
         --time) OVERRIDE_TIME="$2"; shift 2 ;;
         --github-auth) PASSTHROUGH+=("$1"); shift ;;
@@ -159,6 +171,11 @@ if [[ "$GPU" == true ]]; then
         GPU_PARTITION=$(_gpu_partition "$SLURM_TIME")
     fi
     GPU_SLURM_ARGS=(--gpus=${GPU_TYPE}:1 -p ${GPU_PARTITION} --tmp=50G)
+    # On Euler, --gpus=TYPE does not enforce the GPU type — the scheduler ignores the name
+    # and assigns any available GPU. Use --gres=gpumem:SIZE to filter by VRAM instead.
+    if [[ -n "$GPU_MEM" ]]; then
+        GPU_SLURM_ARGS+=(--gres=gpumem:${GPU_MEM})
+    fi
 else
     GPU_SLURM_ARGS=()
 fi
@@ -178,6 +195,8 @@ if [[ "$INTERACTIVE" == true ]]; then
 else
     SBATCH_CMD=(sbatch
         "${GPU_SLURM_ARGS[@]+"${GPU_SLURM_ARGS[@]}"}"
+        --mem-per-cpu="$SLURM_MEM"
+        --cpus-per-task="$SLURM_CPUS"
         --export=ALL,EULER_AGENTS_DIR="$REPO_DIR"
         --output="$LOGS_DIR/slurm-%j.out"
         --error="$LOGS_DIR/slurm-%j.err"
