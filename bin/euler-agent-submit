@@ -34,6 +34,12 @@ OPTIONS
                             nvidia_rtx_pro_6000     — RTX Pro 6000 Blackwell 96 GB
                             nvidia_geforce_rtx_4090 — RTX 4090 24 GB
                             nvidia_geforce_rtx_3090 — RTX 3090 24 GB
+  --preset NAME           Apply a resource preset from config/presets.json.
+                            Built-in: lightweight (1 CPU, 2G), medium-cpu (4 CPU, 32G),
+                            medium-gpu (4 CPU, 32G, A100 40GB). Individual flags override preset.
+  --cpus N                Number of CPUs (default from settings).
+  --mem-per-cpu SIZE      RAM per CPU, e.g. 4G or 8G (default from settings).
+                            Total RAM = N × SIZE. e.g. --cpus 6 --mem-per-cpu 8G gives 48 GB.
   --gpu-mem SIZE          GPU memory filter, e.g. 80g or 96g. Adds --gres=gpumem:SIZE
                             to the sbatch call so the scheduler picks a node with at
                             least that much GPU VRAM. Use this to distinguish 40 GB vs
@@ -108,16 +114,57 @@ GPU_PARTITION_OVERRIDE=""
 OVERRIDE_TIME=""
 PASSTHROUGH=()
 
+PRESETS_FILE="$REPO_DIR/config/presets.json"
+
+_apply_preset() {
+    local name="$1"
+    local preset
+    preset=$(python3 -c "
+import json, sys
+p = json.load(open('$PRESETS_FILE'))
+if '$name' not in p:
+    print('Unknown preset. Available: ' + ', '.join(p.keys()), file=sys.stderr)
+    sys.exit(1)
+v = p['$name']
+print(v.get('cpus', ''))
+print(v.get('mem_per_cpu', ''))
+print(v.get('gpu', False))
+print(v.get('gpu_type', 'a100'))
+print(v.get('gpu_mem', ''))
+") || exit 1
+    local cpus mem_per_cpu gpu gpu_type gpu_mem
+    IFS=$'\n' read -r cpus mem_per_cpu gpu gpu_type gpu_mem <<< "$preset"
+    [[ -n "$cpus" ]]       && SLURM_CPUS="$cpus"
+    [[ -n "$mem_per_cpu" ]] && SLURM_MEM="$mem_per_cpu"
+    if [[ "$gpu" == "True" ]]; then
+        GPU=true
+        GPU_TYPE="$gpu_type"
+        GPU_MEM="$gpu_mem"
+        PASSTHROUGH+=(--gpu --gpu-type "$gpu_type")
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --interactive) INTERACTIVE=true; shift ;;
+        --preset) _apply_preset "$2"; shift 2 ;;
         --gpu) GPU=true; PASSTHROUGH+=("$1"); shift ;;
         --gpu-type) GPU_TYPE="$2"; PASSTHROUGH+=("$1" "$2"); shift 2 ;;
         --gpu-mem) GPU_MEM="$2"; shift 2 ;;
+        --cpus) SLURM_CPUS="$2"; shift 2 ;;
+        --mem-per-cpu) SLURM_MEM="$2"; shift 2 ;;
         --partition) GPU_PARTITION_OVERRIDE="$2"; shift 2 ;;
         --time) OVERRIDE_TIME="$2"; shift 2 ;;
         --github-auth) PASSTHROUGH+=("$1"); shift ;;
+        --task-file)
+            _tf="$2"
+            if [[ ! -f "$_tf" ]]; then
+                echo "ERROR: task file not found: $2" >&2
+                exit 1
+            fi
+            PASSTHROUGH+=("$1" "$(realpath "$_tf")")
+            shift 2 ;;
         *) PASSTHROUGH+=("$1"); shift ;;
     esac
 done
@@ -178,6 +225,7 @@ if [[ "$GPU" == true ]]; then
     fi
 else
     GPU_SLURM_ARGS=()
+    [[ -n "$GPU_PARTITION_OVERRIDE" ]] && GPU_SLURM_ARGS+=(-p "$GPU_PARTITION_OVERRIDE")
 fi
 
 mkdir -p "$LOGS_DIR"
@@ -195,6 +243,7 @@ if [[ "$INTERACTIVE" == true ]]; then
 else
     SBATCH_CMD=(sbatch
         "${GPU_SLURM_ARGS[@]+"${GPU_SLURM_ARGS[@]}"}"
+        --time="$SLURM_TIME"
         --mem-per-cpu="$SLURM_MEM"
         --cpus-per-task="$SLURM_CPUS"
         --export=ALL,EULER_AGENTS_DIR="$REPO_DIR"
