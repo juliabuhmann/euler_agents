@@ -1,0 +1,19 @@
+{
+  "lightweight": {
+    "cpus": 1,
+    "mem_per_cpu": "2G",
+    "gpu": false
+  },
+  "medium-cpu": {
+    "cpus": 4,
+    "mem_per_cpu": "8G",
+    "gpu": false
+  },
+  "medium-gpu": {
+    "cpus": 4,
+    "mem_per_cpu": "8G",
+    "gpu": true,
+    "gpu_type": "a100",
+    "gpu_mem": "40g"
+  }
+}
