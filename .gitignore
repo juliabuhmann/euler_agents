@@ -7,3 +7,7 @@ config/settings.local.json
 
 # Task prompts are private — not for the public repo
 tasks/
+
+# SLURM job logs (keep the test scripts, not their output)
+test_slurm/*.out
+test_slurm/*.err
