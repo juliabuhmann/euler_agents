@@ -112,6 +112,25 @@ except Exception as e:
     print("Warning: could not extract summary from claude-output.json: %s" % e, file=sys.stderr)
 '
     fi
+    # On failure, surface Claude's raw JSON to the job log — otherwise the stop
+    # reason (budget cap, max turns, API/auth error) dies with the container tmpdir.
+    if [[ "$AGENT_EXIT" -ne 0 ]]; then
+        echo "=== Claude exited $AGENT_EXIT — result JSON follows ===" >&2
+        python3 -c '
+import json, sys
+try:
+    d = json.load(open("/tmp/claude-output.json"))
+    for k in ("type", "subtype", "is_error", "num_turns", "total_cost_usd", "result"):
+        if k in d:
+            print("  %s: %s" % (k, d[k]), file=sys.stderr)
+except Exception as e:
+    sys.stderr.write("  (could not parse claude-output.json: %s)\n" % e)
+    try:
+        sys.stderr.write(open("/tmp/claude-output.json").read()[:4000] + "\n")
+    except Exception:
+        pass
+' >&2
+    fi
 fi
 
 # Append agent-written summary to REPORT.md
