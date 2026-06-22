@@ -28,6 +28,12 @@ OPTIONS
   --max-budget-usd N          Hard USD spending cap (Claude only)
   --effort low|medium|high|xhigh|max
                               Thinking depth (Claude only)
+  --auth   apikey|subscription
+                              Claude auth source (default: apikey). 'apikey' uses
+                              ANTHROPIC_API_KEY (pay-per-use, accurate cost reporting).
+                              'subscription' injects CLAUDE_CODE_OAUTH_TOKEN, a long-lived
+                              token from 'claude setup-token' (notional cost, plan rate limits
+                              apply). Ignored for Codex.
   --ref DIR                   Bind a reference directory to /reference inside the container
   --github-auth               Inject GitHub credentials into the container so the agent can
                               clone private repos, commit, push, and open PRs. Requires
@@ -94,6 +100,7 @@ REPO_URL=""
 MODEL=""
 MAX_BUDGET_USD=""
 AGENT_EFFORT=""
+AUTH_MODE=""
 PROJECT=""
 REF_DIR=""
 INTERACTIVE=false
@@ -111,6 +118,7 @@ while [[ $# -gt 0 ]]; do
         --model)             MODEL="$2";               shift 2 ;;
         --max-budget-usd)    MAX_BUDGET_USD="$2";      shift 2 ;;
         --effort)            AGENT_EFFORT="$2";        shift 2 ;;
+        --auth)              AUTH_MODE="$2";           shift 2 ;;
         --project)           PROJECT="$2";             shift 2 ;;
         --ref)               REF_DIR="$2";             shift 2 ;;
         --github-auth)       GITHUB_AUTH=true;         shift ;;
@@ -162,6 +170,8 @@ fi
 [[ -z "$MODEL"          ]] && MODEL=$(_agent_setting model)
 [[ -z "$MAX_BUDGET_USD" ]] && MAX_BUDGET_USD=$(_agent_setting max_budget_usd)
 [[ -z "$AGENT_EFFORT"   ]] && AGENT_EFFORT=$(_agent_setting effort)
+[[ -z "$AUTH_MODE"      ]] && AUTH_MODE=$(_agent_setting auth)
+[[ -z "$AUTH_MODE"      ]] && AUTH_MODE="apikey"
 
 # Load API credentials (secrets.env is the template; secrets.local.env holds real values)
 SECRETS="$REPO_DIR/config/secrets.env"
@@ -170,6 +180,7 @@ SECRETS_LOCAL="$REPO_DIR/config/secrets.local.env"
 [[ -f "$SECRETS_LOCAL" ]] && source "$SECRETS_LOCAL"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 GIT_USER_NAME="${GIT_USER_NAME:-}"
 GIT_USER_EMAIL="${GIT_USER_EMAIL:-}"
@@ -210,7 +221,28 @@ SING_ENV=(
     --env "CONDA_PKGS_DIRS=/tmp/conda_pkgs"
 )
 [[ -n "$OPENAI_API_KEY" ]]   && SING_ENV+=(--env "OPENAI_API_KEY=$OPENAI_API_KEY")
-[[ -n "$ANTHROPIC_API_KEY" ]] && SING_ENV+=(--env "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+
+# Anthropic auth (Claude only). Two modes; each withholds the other's credential
+# (--containall --cleanenv keeps any host credential out, so not injecting is enough):
+#   subscription — inject CLAUDE_CODE_OAUTH_TOKEN, a long-lived `claude setup-token`.
+#                  Cost reporting is notional; bound by plan rate limits.
+#   apikey       — inject ANTHROPIC_API_KEY (pay-per-use, accurate cost reporting).
+if [[ "$AGENT" == claude && "$AUTH_MODE" == subscription ]]; then
+    if [[ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]]; then
+        echo "ERROR: --auth subscription requires CLAUDE_CODE_OAUTH_TOKEN in config/secrets.local.env." >&2
+        echo "       Generate one with 'claude setup-token'. Use --auth apikey for pay-per-use instead." >&2
+        exit 1
+    fi
+    SING_ENV+=(--env "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN")
+    echo "Auth:      Claude subscription (long-lived OAuth token)"
+elif [[ "$AGENT" == claude && -z "$ANTHROPIC_API_KEY" ]]; then
+    echo "ERROR: --auth apikey requires ANTHROPIC_API_KEY in config/secrets.local.env." >&2
+    echo "       Use --auth subscription to run on your Claude subscription instead." >&2
+    exit 1
+else
+    [[ -n "$ANTHROPIC_API_KEY" ]] && SING_ENV+=(--env "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+    [[ "$AGENT" == claude ]] && echo "Auth:      Anthropic API key"
+fi
 [[ -n "${SLURM_JOB_ID:-}" ]] && SING_ENV+=(--env "SLURM_JOB_ID=$SLURM_JOB_ID")
 if [[ "$GITHUB_AUTH" == true ]]; then
     [[ -z "$GITHUB_TOKEN" ]] && { echo "ERROR: --github-auth requires GITHUB_TOKEN in secrets.local.env" >&2; exit 1; }

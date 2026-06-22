@@ -54,8 +54,9 @@ OPTIONS
   -h, --help              Show this help
 
 Without --task / --task-file, reads the task from config/task.json.
-Additional flags (--project, --max-budget-usd, --effort, --ref) are forwarded
-to euler-agent-run; see: euler-agent-run --help
+Additional flags (--project, --max-budget-usd, --effort, --auth, --ref) are
+forwarded to euler-agent-run; see: euler-agent-run --help
+  --auth apikey|subscription   Claude auth: API key (default) or subscription (CLAUDE_CODE_OAUTH_TOKEN).
 
 EXAMPLES
   # One-off task

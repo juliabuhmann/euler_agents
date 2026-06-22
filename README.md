@@ -267,9 +267,9 @@ Claude Code (`--agent claude`) is an alternative to Codex with the same interfac
 
 | | Codex | Claude |
 |---|---|---|
-| Auth | Browser OAuth → `home-codex/` | API key (`ANTHROPIC_API_KEY`) |
+| Auth | Browser OAuth → `home-codex/` | API key, or Team/Max subscription login (`--auth`) |
 | Default model | `gpt-5.4` | `claude-sonnet-4-6` |
-| Cost reporting | not implemented | recorded in `REPORT.md` |
+| Cost reporting | not implemented | recorded in `REPORT.md` (API key only) |
 
 ### Setup
 
@@ -300,6 +300,57 @@ After the job finishes:
 cat <workspace_dir>/harness-test/hello.txt
 cat <workspace_dir>/harness-test/REPORT.md   # should include a cost= field
 ```
+
+### Auth: API key vs subscription
+
+By default Claude jobs use `ANTHROPIC_API_KEY` (pay-per-use). If you have a Claude Team or Max plan, `--auth subscription` runs jobs on your subscription instead — the key is withheld and Claude Code authenticates with a long-lived OAuth token (`CLAUDE_CODE_OAUTH_TOKEN`).
+
+```bash
+# API key (default)
+euler-agent-submit --agent claude --auth apikey --task "..."
+
+# subscription (Team/Max)
+euler-agent-submit --agent claude --auth subscription --task "..."
+```
+
+To use `--auth subscription`, set the token up once.
+
+**1. Generate the token.** On a machine with the `claude` CLI installed and network access (e.g. an Euler login node with `module load eth_proxy`), run:
+
+```bash
+claude setup-token
+```
+
+This starts a browser OAuth flow — it prints a URL; open it, sign in to your Claude account, and approve. The command then prints a long-lived token (`sk-ant-oat...`). Requires a Claude subscription (Team or Max); it errors out if your plan can't issue one.
+
+**2. Store it** as a line in `config/secrets.local.env` (gitignored, auto-loaded by jobs):
+
+```
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-...
+```
+
+**3. Use it** — per run, or make it the default in `config/settings.json` (`"claude": { "auth": "subscription" }`):
+
+```bash
+euler-agent-submit --agent claude --auth subscription \
+    --project myproject --task "..."
+```
+
+**Cost reporting is notional in this mode.** `REPORT.md` still shows a `cost=$…` figure, but on a subscription you don't pay per token — it's a hypothetical cost Claude computes from token usage (tokens × list prices), not real spend. Your actual limit is the plan's rate limits, which the harness does not track, so an unattended job can silently consume your quota.
+
+`--max-budget-usd` still works as a guardrail: Claude Code enforces it against that notional cost and stops with `error_max_budget_usd` when exceeded. It bounds token spend (a proxy for quota use), even though no dollars are actually charged.
+
+To check which auth a job used, look at the `Auth:` line in the SLURM `.out` log header:
+
+```
+SLURM job <jobid> on <node>
+Workspace: ...
+Agent:     claude
+Image:     ...
+Auth:      Anthropic API key
+```
+
+`Auth: Anthropic API key` or `Auth: Claude subscription (long-lived OAuth token)` tells you which one was used.
 
 ### Controlling costs
 
