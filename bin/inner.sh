@@ -16,6 +16,49 @@ MAX_BUDGET_USD="${AGENT_MAX_BUDGET_USD:-}"
 AGENT_EFFORT="${AGENT_EFFORT:-}"
 JOB_ID="${SLURM_JOB_ID:-interactive}"
 
+# Remote Control mode: launch a long-running, steerable Claude session instead of the
+# headless one-shot task flow. Steer it from claude.ai/code or the Claude mobile app.
+# Verified: the `remote-control` subcommand runs headless (no TTY), unlike the
+# `--remote-control` flag which falls through to --print and demands stdin input.
+if [[ "${REMOTE_CONTROL:-}" == "true" ]]; then
+    RC_NAME="${RC_SESSION_NAME:-euler-rc}"
+    cd /workspace
+    if [[ "$GIT_AUTH" == "true" ]]; then
+        git config --global user.name  "$GIT_USER_NAME"
+        git config --global user.email "$GIT_USER_EMAIL"
+        git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+    fi
+    if [[ -n "$REPO_URL" ]]; then
+        REPO_NAME=$(basename "$REPO_URL" .git)
+        [[ -d "$REPO_NAME" ]] || git clone "$REPO_URL" "$REPO_NAME"
+        cd "$REPO_NAME"
+    fi
+    # Pre-accept the per-directory workspace-trust dialog. Remote Control (unlike `claude -p`)
+    # prompts for trust and has no --dangerously-skip-permissions; trust is stored per path
+    # in ~/.claude.json. Verified: without this it aborts with "Workspace not trusted".
+    python3 - "$PWD" <<'PY'
+import json, os, sys
+cwd = sys.argv[1]
+p = os.path.expanduser("~/.claude.json")
+d = json.load(open(p)) if os.path.exists(p) else {}
+d.setdefault("projects", {}).setdefault(cwd, {})["hasTrustDialogAccepted"] = True
+json.dump(d, open(p, "w"))
+PY
+    echo "=== Claude Remote Control  (session: $RC_NAME) ==="
+    echo "Steer from https://claude.ai/code or the Claude mobile app (find it by name, or use"
+    echo "the claude.ai/code URL printed below once it connects)."
+    echo "Live until this SLURM job ends; a >10-min network drop also ends it."
+    echo "Model is chosen per-session in the app; --model/--effort/--max-budget-usd do not apply."
+    echo "------------"
+    # Auto-answer the 'Enable Remote Control?' prompt (no TTY under SLURM), and bypass
+    # per-action approvals so the agent can work unattended while you steer intermittently.
+    set +e
+    printf 'y\n' | claude remote-control --name "$RC_NAME" --permission-mode bypassPermissions
+    RC_EXIT=$?
+    set -e
+    exit "$RC_EXIT"
+fi
+
 TASK=$(cat /tmp/.task)
 [[ -z "$TASK" ]] && { echo "ERROR: task is empty" >&2; exit 1; }
 

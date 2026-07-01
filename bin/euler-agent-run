@@ -40,6 +40,14 @@ OPTIONS
                               GITHUB_TOKEN, GIT_USER_NAME, GIT_USER_EMAIL in
                               config/secrets.local.env. Off by default.
   --interactive               Open an interactive shell inside the container instead of running
+  --claude-login              One-time: run 'claude auth login' with home-claude/ writable to
+                              obtain the full-scope OAuth login Remote Control requires. Run this
+                              directly on a login node (needs a TTY + internet); no SLURM.
+  --remote-control            Start a steerable Claude session (drive it from claude.ai/code or the
+                              mobile app) instead of running a task headless. Claude-only; requires
+                              --project (transcripts persist in the project home). Model is chosen
+                              per-session in the app; --model/--effort/--max-budget-usd/--auth
+                              do not apply (it runs on the stored OAuth login).
   -h, --help                  Show this help
 
 Task resolution order (highest priority first):
@@ -107,6 +115,8 @@ INTERACTIVE=false
 GPU=false
 GITHUB_AUTH=false
 NOTIFY_SUCCESS_OVERRIDE=""
+REMOTE_CONTROL=false
+CLAUDE_LOGIN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -122,6 +132,8 @@ while [[ $# -gt 0 ]]; do
         --project)           PROJECT="$2";             shift 2 ;;
         --ref)               REF_DIR="$2";             shift 2 ;;
         --github-auth)       GITHUB_AUTH=true;         shift ;;
+        --remote-control)    REMOTE_CONTROL=true;      shift ;;
+        --claude-login)      CLAUDE_LOGIN=true;        shift ;;
         --gpu)               GPU=true;                 shift ;;
         --gpu-type)          shift 2 ;;  # consumed by euler-agent-submit, ignored here
         --interactive)       INTERACTIVE=true;         shift ;;
@@ -130,6 +142,29 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown argument: $1" >&2; echo "Run with --help for usage." >&2; exit 1 ;;
     esac
 done
+
+# One-time interactive OAuth login for Claude Remote Control.
+# Remote Control requires a full-scope claude.ai login token (API keys and the
+# inference-only `claude setup-token` are both rejected). We run `claude auth login`
+# with home-claude/ bound WRITABLE so the resulting credentials persist there and
+# later seed each project's persistent Remote Control home.
+# Run this directly on a login node (has internet); it needs a TTY for the browser flow.
+if [[ "$CLAUDE_LOGIN" == true ]]; then
+    SOURCE_HOME="$REPO_DIR/home-claude"
+    mkdir -p "$SOURCE_HOME"
+    echo "Launching 'claude auth login' inside the container."
+    echo "  Credentials persist in: $SOURCE_HOME  (gitignored)"
+    echo "  Choose your claude.ai account (NOT an API key) when prompted."
+    singularity exec \
+        --cleanenv --containall \
+        --home "$SOURCE_HOME:/home" \
+        --env "PATH=/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        "$IMAGE_PATH" \
+        bash -lc 'export HOME=/home; cd /home; claude auth login && echo && claude auth status'
+    echo "If login succeeded, launch a steerable session with:"
+    echo "  euler-agent-submit --agent claude --remote-control --project NAME --time 8:00:00"
+    exit 0
+fi
 
 # Helper: read a field from settings.json scoped to the current agent.
 # Each agent only reads its own section — codex and claude never share defaults.
@@ -173,6 +208,14 @@ fi
 [[ -z "$AUTH_MODE"      ]] && AUTH_MODE=$(_agent_setting auth)
 [[ -z "$AUTH_MODE"      ]] && AUTH_MODE="apikey"
 
+# Remote Control mode: a long-running, steerable Claude session (claude.ai/mobile app).
+# Distinct from the headless one-shot path — requires a persistent, project-scoped home
+# so the conversation transcripts survive the job (stored under .claude-home).
+if [[ "$REMOTE_CONTROL" == true ]]; then
+    [[ "$AGENT" == claude ]] || { echo "ERROR: --remote-control is claude-only." >&2; exit 1; }
+    [[ -n "$PROJECT"      ]] || { echo "ERROR: --remote-control requires --project (session transcript persists in the project home)." >&2; exit 1; }
+fi
+
 # Load API credentials (secrets.env is the template; secrets.local.env holds real values)
 SECRETS="$REPO_DIR/config/secrets.env"
 [[ -f "$SECRETS" ]] && source "$SECRETS"
@@ -200,11 +243,23 @@ mkdir -p "$JOB_TMPDIR/scratch" "$JOB_TMPDIR/conda_pkgs"
 # Write task to job-specific scratch (not workspace) to avoid races on parallel jobs
 printf '%s' "$TASK" > "$JOB_TMPDIR/scratch/.task"
 
-# Give each job its own home copy so parallel jobs don't race on agent cache/state
+# Give each job its own home copy so parallel jobs don't race on agent cache/state.
+# Remote Control is the exception: it uses a persistent, project-scoped home so the
+# OAuth token refreshes and the conversation transcript survive across jobs.
 SOURCE_HOME="$REPO_DIR/home-${AGENT}"
 mkdir -p "$SOURCE_HOME"
-JOB_HOME="$JOB_TMPDIR/home-${AGENT}"
-cp -r "$SOURCE_HOME" "$JOB_HOME"
+if [[ "$REMOTE_CONTROL" == true ]]; then
+    JOB_HOME="$RUN_WORKSPACE/.claude-home"
+    if [[ ! -d "$JOB_HOME" ]]; then
+        echo "Seeding persistent Claude home at $JOB_HOME from $SOURCE_HOME"
+        cp -r "$SOURCE_HOME" "$JOB_HOME"
+    else
+        echo "Reusing persistent Claude home at $JOB_HOME (session transcripts live here)"
+    fi
+else
+    JOB_HOME="$JOB_TMPDIR/home-${AGENT}"
+    cp -r "$SOURCE_HOME" "$JOB_HOME"
+fi
 
 echo "Workspace: $RUN_WORKSPACE"
 echo "Agent:     $AGENT"
@@ -227,7 +282,17 @@ SING_ENV=(
 #   subscription — inject CLAUDE_CODE_OAUTH_TOKEN, a long-lived `claude setup-token`.
 #                  Cost reporting is notional; bound by plan rate limits.
 #   apikey       — inject ANTHROPIC_API_KEY (pay-per-use, accurate cost reporting).
-if [[ "$AGENT" == claude && "$AUTH_MODE" == subscription ]]; then
+if [[ "$REMOTE_CONTROL" == true ]]; then
+    # Inject no credential: Remote Control uses the full-scope OAuth login stored in
+    # the persistent home (from `euler-agent-run --claude-login`). An injected
+    # ANTHROPIC_API_KEY or inference-only token would be rejected by Remote Control.
+    if [[ ! -f "$JOB_HOME/.claude/.credentials.json" ]]; then
+        echo "WARNING: no OAuth credentials found in $JOB_HOME/.claude/.credentials.json." >&2
+        echo "         Remote Control will fail to start. Run 'euler-agent-run --claude-login' first," >&2
+        echo "         then delete $JOB_HOME so it re-seeds from the fresh login." >&2
+    fi
+    echo "Auth:      Claude subscription (full-scope OAuth from persistent home)"
+elif [[ "$AGENT" == claude && "$AUTH_MODE" == subscription ]]; then
     if [[ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]]; then
         echo "ERROR: --auth subscription requires CLAUDE_CODE_OAUTH_TOKEN in config/secrets.local.env." >&2
         echo "       Generate one with 'claude setup-token'. Use --auth apikey for pay-per-use instead." >&2
@@ -244,6 +309,12 @@ else
     [[ "$AGENT" == claude ]] && echo "Auth:      Anthropic API key"
 fi
 [[ -n "${SLURM_JOB_ID:-}" ]] && SING_ENV+=(--env "SLURM_JOB_ID=$SLURM_JOB_ID")
+if [[ "$REMOTE_CONTROL" == true ]]; then
+    SING_ENV+=(
+        --env "REMOTE_CONTROL=true"
+        --env "RC_SESSION_NAME=euler-rc-${PROJECT}-${SLURM_JOB_ID:-interactive}"
+    )
+fi
 if [[ "$GITHUB_AUTH" == true ]]; then
     [[ -z "$GITHUB_TOKEN" ]] && { echo "ERROR: --github-auth requires GITHUB_TOKEN in secrets.local.env" >&2; exit 1; }
     SING_ENV+=(

@@ -54,9 +54,11 @@ OPTIONS
   -h, --help              Show this help
 
 Without --task / --task-file, reads the task from config/task.json.
-Additional flags (--project, --max-budget-usd, --effort, --auth, --ref) are
-forwarded to euler-agent-run; see: euler-agent-run --help
+Additional flags (--project, --max-budget-usd, --effort, --auth, --ref,
+--remote-control) are forwarded to euler-agent-run; see: euler-agent-run --help
   --auth apikey|subscription   Claude auth: API key (default) or subscription (CLAUDE_CODE_OAUTH_TOKEN).
+  --remote-control             Start a steerable Claude session driven from claude.ai/mobile app.
+                               Claude-only; requires --project. First run 'euler-agent-run --claude-login'.
 
 EXAMPLES
   # One-off task

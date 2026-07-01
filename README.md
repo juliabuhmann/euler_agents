@@ -379,6 +379,33 @@ After each run the actual cost is recorded in the workspace `REPORT.md`:
 ## Run 2026-04-21T12:00:00Z  (job=12345  model=claude-sonnet-4-6  exit=0  cost=$1.2340)
 ```
 
+### Remote control (steerable sessions)
+
+`--remote-control` starts a long-running Claude session on the compute node that you steer
+from [claude.ai/code](https://claude.ai/code) or the mobile app — kick it off, close your
+laptop, check in from your phone.
+
+One-time login (Remote Control needs a full-scope claude.ai account — API keys and
+`setup-token` are rejected). Creds persist in `home-claude/`:
+
+```bash
+bin/euler-agent-run --claude-login   # on a login node; pick your claude.ai account, not an API key
+```
+
+Then launch (`--project` required — transcripts persist in the project home and survive the job):
+
+```bash
+euler-agent-submit --agent claude --remote-control --project mywork --time 8:00:00
+```
+
+A `claude.ai/code?environment=...` URL appears in the log (`logs/slurm-<jobid>.out`); or find
+the session by name (`euler-rc-<project>-<jobid>`) in the app.
+
+Notes: live steering ends when the job ends (raise `--time`). `--model/--effort/--max-budget-usd/
+--auth/--task` don't apply — it runs on your subscription, model chosen in the app. On Team/
+Enterprise, an Owner may need to enable Remote Control in admin settings. Don't test via
+`--interactive` (that path has no internet — no `eth_proxy`).
+
 ---
 
 ## GitHub access (optional)
