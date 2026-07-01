@@ -268,7 +268,7 @@ Claude Code (`--agent claude`) is an alternative to Codex with the same interfac
 | | Codex | Claude |
 |---|---|---|
 | Auth | Browser OAuth → `home-codex/` | API key, or Team/Max subscription login (`--auth`) |
-| Default model | `gpt-5.4` | `claude-sonnet-4-6` |
+| Default model | `gpt-5.4` | `claude-opus-4-8` |
 | Cost reporting | not implemented | recorded in `REPORT.md` (API key only) |
 
 ### Setup
@@ -358,7 +358,7 @@ Auth:      Anthropic API key
 |---|---|---|
 | `--max-budget-usd` | Hard USD cap — agent stops when hit | `10` |
 | `--effort` | Thinking depth: `low / medium / high / xhigh / max` | Claude default |
-| `--model` | Model — haiku ≪ sonnet ≪ opus in cost | `claude-sonnet-4-6` |
+| `--model` | Model — haiku ≪ sonnet ≪ opus in cost | `claude-opus-4-8` |
 
 Priority order: CLI flag > `config/task.json` > `config/settings.json`.
 
@@ -370,7 +370,7 @@ euler-agent-submit --agent claude --max-budget-usd 20 --effort high --task "Deep
 To change defaults for all Claude jobs, edit `config/settings.json`:
 
 ```json
-"claude": { "model": "claude-sonnet-4-6", "effort": null, "max_budget_usd": 10 }
+"claude": { "model": "claude-opus-4-8", "effort": null, "max_budget_usd": 10 }
 ```
 
 After each run the actual cost is recorded in the workspace `REPORT.md`:
