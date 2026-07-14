@@ -406,6 +406,67 @@ Notes: live steering ends when the job ends (raise `--time`). `--model/--effort/
 Enterprise, an Owner may need to enable Remote Control in admin settings. Don't test via
 `--interactive` (that path has no internet — no `eth_proxy`).
 
+#### Manual session on a node you manage (SSH + tmux)
+
+The `euler-agent-submit --remote-control` line above is fire-and-forget. If you'd rather hold a
+GPU node open as an interactive foothold — to run things by hand, debug, and start/restart
+Remote Control yourself — allocate the node first, then drive it over SSH + tmux.
+
+> The `config/presets.json` sizes (`medium-gpu`, …) are a `euler-agent-submit` feature and
+> **cannot** be passed to a bare node allocation. Specify the SLURM resources directly below
+> (mirror a preset's values if you want consistency).
+
+**1. Allocate a long-running GPU node** — detached, so it outlives your shell. The partition
+family depends on the GPU type: the **RTX Pro 6000** (Blackwell, 96 GB) uses **`cuda13pr.*`**;
+other cards use `gpupr.*` / `gpu.*`. Pick one whose limit covers your wall time — for the RTX
+Pro 6000: `cuda13pr.4h` (4 h), `cuda13pr.24h` (2 days), `cuda13pr.120h` (5 days). Run
+`sinfo -o "%P %l %G"` to list partitions, limits, and their GPUs. For a multi-day session:
+
+```bash
+sbatch -p cuda13pr.120h --time=5-00:00:00 \
+    --gpus=nvidia_rtx_pro_6000:1 --gres=gpumem:96g \
+    --cpus-per-task=4 --mem-per-cpu=8G \
+    --job-name=rc-node --wrap="sleep infinity"
+```
+
+**2. Find the node and SSH in** (once the job shows `R` / RUNNING):
+
+```bash
+squeue --me                 # note JOBID and NODELIST (e.g. eu-g5-042)
+ssh <nodename>              # Euler allows SSH to nodes you hold an allocation on
+# fallback if SSH to the node is blocked:  srun --jobid=<jobid> --pty bash
+```
+
+**3. Start tmux on the node:**
+
+```bash
+tmux new -s rc
+```
+
+**4. Launch Remote Control with `euler-agent-run`** — *not* `submit`; you already hold the node.
+Load the proxy first (this path skips the SLURM wrapper that normally does it), then:
+
+```bash
+module load eth_proxy
+cd /path/to/euler_agents
+bin/euler-agent-run --remote-control --agent claude \
+    --project myproject \
+    --gpu \
+    --ref /path/to/reference
+```
+
+This runs in the foreground: it seeds workspace trust, answers the enable prompt, uses the
+persistent `.claude-home`, and prints the `claude.ai/code?environment=...` URL. Detach with
+`Ctrl-b d` and steer from the app; the session keeps running on the node.
+
+Notes:
+- Pass only node-*use* flags to `euler-agent-run` (`--project`, `--gpu`, `--ref`,
+  `--remote-control`). Allocation flags (`--cpus`, `--mem-per-cpu`, `--time`, `--gpu-mem`) were
+  fixed in step 1, and `run` rejects them.
+- To reconnect after a disconnect: SSH back to the **same** node, then `tmux attach -t rc`.
+- An idle GPU reservation still holds the card — use a CPU node (drop `--gpus`/`--gres`) if the
+  work only needs the GPU in bursts.
+
 ---
 
 ## GitHub access (optional)
