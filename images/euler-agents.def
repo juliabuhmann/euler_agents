@@ -5,6 +5,13 @@ Stage: uv_stage
 Bootstrap: docker
 From: ubuntu:24.04
 
+# Build-time arguments (override with --build-arg NAME=VALUE). Pin the CLIs to the
+# versions you run on the host so transcripts and behaviour match across the boundary:
+#   --build-arg CLAUDE_CODE_VERSION="$(claude --version | awk '{print $1}')"
+%arguments
+    CLAUDE_CODE_VERSION=latest
+    CODEX_VERSION=latest
+
 %files from uv_stage
     /uv /bin/
     /uvx /bin/
@@ -34,11 +41,12 @@ From: ubuntu:24.04
     rm -rf /var/lib/apt/lists/* && apt-get clean
 
     # Codex CLI
-    npm install -g @openai/codex@latest
+    npm install -g "@openai/codex@{{ CODEX_VERSION }}"
 
     # Claude Code CLI
-    npm install -g @anthropic-ai/claude-code@latest
+    npm install -g "@anthropic-ai/claude-code@{{ CLAUDE_CODE_VERSION }}"
     npm cache clean --force
+    echo "claude-code: $(claude --version)  codex: $(codex --version)" > /etc/euler-agents-versions
 
     # miniforge (conda + mamba) — agents create their own envs at runtime
     curl -fsSLo /tmp/miniforge.sh \

@@ -5,7 +5,9 @@ This directory holds the image definition for the agent runtime.
 ## Contents
 
 - `euler-agents.def` — the Singularity definition file. Builds an Ubuntu 24.04 image with:
-  - Node.js 24 + the two agent CLIs: `@openai/codex@latest` and `@anthropic-ai/claude-code@latest`
+  - Node.js 24 + the two agent CLIs, `@anthropic-ai/claude-code` and `@openai/codex`, at the
+    versions given by the build arguments `CLAUDE_CODE_VERSION` / `CODEX_VERSION`
+    (default `latest`; the versions installed are recorded in `/etc/euler-agents-versions`)
   - Miniforge (conda + mamba) at `/opt/conda` — agents create their own envs at runtime
   - `uv` for fast pip installs; plus `git`, `curl`, `bubblewrap`, build tools, etc.
 
@@ -14,8 +16,10 @@ The built `.sif` files live **outside the repo** at
 `image_path` key in `config/settings.local.json` (which overrides `config/settings.json` —
 `euler-agent-run` merges local over base, so the `.local` value wins).
 
-Because both agent CLIs are pinned to `@latest`, **rebuilding is how you pick up new CLI / model
-support** — the `.def` itself usually needs no edit.
+**Rebuilding is how you pick up new CLI / model support** — the `.def` itself usually needs no
+edit. Pass the CLI version you run on the host as a build argument so the container and your
+terminal behave identically (same features, and `claude --resume` works across the boundary on
+shared sessions); without it, the build takes whatever `latest` is that day.
 
 ## Rebuilding the image (versioned, no in-place swap)
 
@@ -45,26 +49,27 @@ cd ~/src/euler_agents
 export APPTAINER_TMPDIR="${TMPDIR:-/tmp}/apptainer_tmp"; mkdir -p "$APPTAINER_TMPDIR"
 
 singularity build --fakeroot \
-    /cluster/project/beltrao/jbuhmann/agentic_ai/images/euler-agents-YYYYMMDD.sif \
+    --build-arg CLAUDE_CODE_VERSION="$(claude --version | awk '{print $1}')" \
+    /cluster/project/beltrao/jbuhmann/agentic_ai/images/euler-agents-$(date +%Y%m%d).sif \
     images/euler-agents.def
 ```
 
-The existing `euler-agents.sif` is untouched. If the build fails, nothing in production breaks.
+`claude --version` on the host prints e.g. `2.1.263 (Claude Code)`; the `awk` keeps the number.
+Add `--build-arg CODEX_VERSION=...` likewise if you use Codex. The existing `.sif` files are
+untouched: if the build fails, nothing in production breaks.
 
 ### 3. Smoke-test the new image
 
-Confirm the CLI is current and the target model actually runs (replace the model as needed):
+Confirm the installed versions and that the stored login works, without touching the config:
 
 ```bash
-source config/secrets.env    # exports ANTHROPIC_API_KEY
-singularity exec --cleanenv \
-    --env ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-    /cluster/project/beltrao/jbuhmann/agentic_ai/images/euler-agents-YYYYMMDD.sif \
-    bash -lc 'claude --version && claude --dangerously-skip-permissions \
-        --model claude-opus-4-8 -p "reply with OK" --output-format json'
+IMG=/cluster/project/beltrao/jbuhmann/agentic_ai/images/euler-agents-YYYYMMDD.sif
+singularity exec --cleanenv --containall --home "$PWD/home-claude:/home" "$IMG" \
+    bash -lc 'export HOME=/home; cat /etc/euler-agents-versions; claude auth status'
 ```
 
-A clean JSON reply (no `thinking.type.enabled` 400) means the new CLI is good.
+`auth status` should report `loggedIn: true`. Then run a real task through the launcher after
+step 4 (e.g. the interactive smoke test from the main README).
 
 ### 4. Point euler-agents at the new image
 
@@ -77,10 +82,22 @@ Edit `image_path` in `config/settings.local.json` (the effective override; also 
 
 Rollback = point `image_path` back at the previous `.sif`. No rebuild needed.
 
-Auth is **not** affected by a rebuild: Codex tokens live in `home-codex/` (mounted as `$HOME`)
-and the Claude API key comes from `config/secrets.env` — both are outside the image.
+Auth is **not** affected by a rebuild: the Claude login lives in `home-claude/` and Codex tokens
+in `home-codex/` (each mounted as the agent's `$HOME`) — both are outside the image.
 
 ## Rebuild log
+
+### 2026-09-07 — `euler-agents-20260907.sif` (Claude Code pinned to the host version)
+
+- **Reason:** the container's Claude Code (2.1.185) lagged the host's (2.1.263). Since the
+  launcher now shares session directories between host and container, the two should run the
+  same version so `--resume` works in both directions.
+- **Change:** `euler-agents.def` gained `%arguments` (`CLAUDE_CODE_VERSION`, `CODEX_VERSION`,
+  default `latest`) and writes the installed versions to `/etc/euler-agents-versions`. Built with
+  `--build-arg CLAUDE_CODE_VERSION=2.1.263`; Codex came out as `codex-cli 0.153.4` (latest).
+- **Verified:** `/etc/euler-agents-versions` reports 2.1.263 and `claude auth status` with the
+  stored login reports `loggedIn: true` (claude.ai, team subscription).
+- **Action:** `image_path` repointed in `config/settings.json` and `config/settings.local.json`.
 
 ### 2026-06-22 — `euler-agents-20260622.sif` (Claude Code refresh for Opus 4.8)
 
