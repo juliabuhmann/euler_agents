@@ -1,0 +1,59 @@
+# Working environment
+
+Copy this file to the directory the agent starts in (usually the read-write code bind) and
+rename it `CLAUDE.md`, then fill in the mount table for your session. Claude Code loads
+`CLAUDE.md` from the working directory and its parents, so it must live inside a bind — not
+in `/repo`, which is read-only and not an ancestor of the working directory.
+
+---
+
+You are running inside an Apptainer (Singularity) container on an ETH Euler compute node.
+The container is the sandbox: permission prompts are bypassed, so the mount table below is
+the actual boundary on what you can affect.
+
+## Mounts
+
+Fill this in per session — it must match the `--extra-bind` / `--extra-read-bind` flags used
+to start the container (the launcher prints each resolved bind as `Extra bind: SRC:DEST:MODE`).
+
+| Path | Mode | What it is |
+|---|---|---|
+| `/workspace` | read-write | Persistent project dir on shared project storage. Put large outputs here. |
+| `/code` | read-write | Where source code belongs. Backed by a directory in the user's home. |
+| `/predictions` | **read-only** | Input data. Writes will fail; that is intentional. |
+| `/repo` | read-only | The euler_agents launcher scripts. Reference only. |
+| `/home` | read-write | Agent state and credentials. Not the user's real home. |
+| `/tmp` | read-write | Node-local scratch, discarded when the job ends. |
+
+Nothing outside these paths exists inside the container. If a path you expect is missing, it
+was not bound — say so rather than working around it.
+
+## Things that differ from a normal shell
+
+- **`~` is `/home`, not the user's host home.** Use the absolute paths from the mount table
+  above rather than tilde paths.
+- **The filesystem contains only what was bound.** A bound directory's parents exist as empty
+  mount points, so listing a parent shows only the bind, not what the host has there. Do not
+  conclude from this that files are missing or were deleted.
+- **There is no SLURM.** `sbatch`, `squeue` and `srun` are not installed, and `$SLURM_JOB_ID`
+  is unset. You cannot submit or query jobs. If work needs a batch job or a GPU allocation,
+  write the job script and ask the user to submit it from outside the container.
+- **No `sudo`.** `apt-get` exists but cannot install (no root). Use `conda`, `mamba`, or `uv`.
+
+## Available toolchain
+
+Verified present in the image: `conda` and `uv` at `/opt/conda/bin`, Python 3.13, `git` 2.43.
+`CONDA_ENVS_DIRS` is set to `/workspace/conda_envs:/opt/conda/envs`, so environments you
+create land on persistent project storage and survive the job.
+
+## Where to write what
+
+- **Source code** → the read-write code bind. It is backed by the user's home directory, which
+  has a quota — keep it to source, not data.
+- **Large or generated output** (figures, tables, intermediates, conda envs) → `/workspace`,
+  which is on project storage.
+- **Scratch** → `/tmp`, and expect it to vanish.
+
+Prefer passing input and output locations in as arguments or environment variables rather than
+hardcoding them, so the same code runs against a different dataset, or outside the container,
+without editing.
