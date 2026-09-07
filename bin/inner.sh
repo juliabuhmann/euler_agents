@@ -3,14 +3,12 @@
 # Optionally clones a repo, then runs the requested agent on the task.
 set -euo pipefail
 
-export PATH=/opt/conda/bin:$PATH
-export HOME=/home
-
-mkdir -p /workspace/conda_envs /tmp/conda_pkgs
+# HOME, PATH, conda/cache dirs, git identity + hook — shared with the interactive rcfile.
+# The repo is bound at its host path, so it is addressed via EULER_AGENTS_DIR.
+source "${EULER_AGENTS_DIR:?EULER_AGENTS_DIR not set}/bin/container-env.sh"
 
 AGENT="${AGENT:?AGENT env var not set}"
 REPO_URL="${REPO_URL:-}"
-GIT_AUTH="${GIT_AUTH:-}"
 MODEL="${AGENT_MODEL:-}"
 MAX_BUDGET_USD="${AGENT_MAX_BUDGET_USD:-}"
 AGENT_EFFORT="${AGENT_EFFORT:-}"
@@ -22,14 +20,7 @@ JOB_ID="${SLURM_JOB_ID:-interactive}"
 # `--remote-control` flag which falls through to --print and demands stdin input.
 if [[ "${REMOTE_CONTROL:-}" == "true" ]]; then
     RC_NAME="${RC_SESSION_NAME:-euler-rc}"
-    cd /workspace
-    # Attribute commits to the agent (same hook the one-shot path uses at line 32).
-    git config --global core.hooksPath /repo/config/git-hooks
-    if [[ "$GIT_AUTH" == "true" ]]; then
-        git config --global user.name  "$GIT_USER_NAME"
-        git config --global user.email "$GIT_USER_EMAIL"
-        git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-    fi
+    cd "$AGENT_WORKSPACE"
     if [[ -n "$REPO_URL" ]]; then
         REPO_NAME=$(basename "$REPO_URL" .git)
         [[ -d "$REPO_NAME" ]] || git clone "$REPO_URL" "$REPO_NAME"
@@ -94,17 +85,10 @@ After completing the above task, write a concise summary (max 20 lines) to /tmp/
 - key outputs created (paths and sizes if relevant)
 - any errors or limitations encountered"
 
-cd /workspace
+cd "$AGENT_WORKSPACE"
 
-git config --global core.hooksPath /repo/config/git-hooks
-
-if [[ "$GIT_AUTH" == "true" ]]; then
-    git config --global user.name  "$GIT_USER_NAME"
-    git config --global user.email "$GIT_USER_EMAIL"
-    git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-    echo "=== GitHub auth configured for ${GIT_USER_NAME} <${GIT_USER_EMAIL}> ==="
-fi
-
+# No git credentials exist in the container: public repos clone anonymously, and the
+# agent's commits stay local until the user pushes from the host.
 if [[ -n "$REPO_URL" ]]; then
     REPO_NAME=$(basename "$REPO_URL" .git)
     [[ -d "$REPO_NAME" ]] && rm -rf "$REPO_NAME"
@@ -207,8 +191,8 @@ if [[ -f /tmp/run-summary.txt ]]; then
         printf '\n## Run %s  (job=%s  model=%s  exit=%s%s)\n\n' \
             "$RUN_TS" "$JOB_ID" "$MODEL" "$AGENT_EXIT" "${AGENT_COST:+  cost=\$$AGENT_COST}"
         cat /tmp/run-summary.txt
-    } >> /workspace/REPORT.md
-    echo "=== Summary appended to /workspace/REPORT.md ==="
+    } >> "$AGENT_WORKSPACE/REPORT.md"
+    echo "=== Summary appended to $AGENT_WORKSPACE/REPORT.md ==="
 fi
 
 exit "$AGENT_EXIT"

@@ -21,7 +21,8 @@ OPTIONS
   --agent  codex|claude       Agent to run (default: codex)
   --task   "PROMPT"           Task description
   --task-file FILE            Read task from a file instead of --task
-  --repo   URL                Git repo to clone into /workspace before running
+  --repo   URL                Git repo to clone into the workspace before running (public only:
+                              the container holds no git credentials)
   --model  MODEL              Model override (e.g. claude-sonnet-4-6, gpt-5.4)
   --project NAME              Named workspace; persists and is reused across jobs.
                               Without --project, a fresh timestamped dir is created.
@@ -39,16 +40,14 @@ OPTIONS
                                              limits apply). Does not work with --remote-control.
                               'apikey'       injects ANTHROPIC_API_KEY (pay-per-use, accurate cost
                                              reporting). Does not work with --remote-control.
-  --ref DIR                   Bind a reference directory to /reference inside the container
+  --ref DIR                   Bind a reference directory READ-ONLY at its own host path
   --extra-bind SPEC           Bind an extra host path READ-WRITE into the container. Repeatable.
-                              SPEC is SRC[:DEST][:ro|rw]; DEST defaults to SRC and must be
-                              absolute (that is what distinguishes SRC:DEST from SRC:MODE).
+                              SPEC is SRC[:DEST][:ro|rw]. DEST defaults to SRC — the same path
+                              inside and outside — which is what you want: code the agent writes
+                              then runs unchanged on the host. Give a DEST only when you must.
+                              It must be absolute (that distinguishes SRC:DEST from SRC:MODE).
   --extra-read-bind SPEC      Same, but READ-ONLY. Repeatable. Passing an explicit ':rw' here
                               is an error rather than a silent downgrade.
-  --github-auth               Inject GitHub credentials into the container so the agent can
-                              clone private repos, commit, push, and open PRs. Requires
-                              GITHUB_TOKEN, GIT_USER_NAME, GIT_USER_EMAIL in
-                              config/secrets.local.env. Off by default.
   --interactive               Open an interactive shell inside the container instead of running
   --claude-login              One-time: run 'claude auth login' with home-claude/ writable to
                               obtain the full-scope OAuth login Remote Control requires. Run this
@@ -76,13 +75,20 @@ EXAMPLES
   # Interactive shell inside the Singularity container
   euler-agent-run --agent codex --project myproject --interactive
 
-  # Provide a reference dataset inside the container
+  # Provide a reference dataset inside the container (read-only, same path as on the host)
   euler-agent-run --agent claude --project myproject \
       --ref /cluster/project/beltrao/shared/data \
-      --task "Analyse the CSV files in /reference and write a summary."
+      --task "Analyse the CSV files in /cluster/project/beltrao/shared/data and write a summary."
+
+PATHS INSIDE THE CONTAINER
+  Every bound directory appears at its host path: the workspace, this repo (read-only), --ref,
+  --extra-bind, and the host conda/pixi/cache dirs from settings. Only the agent's home differs:
+  it is /home, a per-job copy of home-<agent>/ (persistent under <workspace>/.claude-home with
+  --remote-control). The host home is never mounted, so nothing the agent does lands under ~.
 
 CONFIGURATION
-  config/settings.json   Image path, workspace dir, per-agent model/budget defaults
+  config/settings.json   Image path, workspace dir, host tool dirs, git identity, per-agent
+                         model/budget defaults. Override in config/settings.local.json.
   config/task.json       Default task used when no --task / --task-file given
   config/secrets.env     API keys (gitignored, sourced automatically)
 EOF
@@ -112,6 +118,17 @@ WORKSPACE_DIR=$(_setting "s['workspace_dir']")
 IMAGE_PATH=$(_setting "s['image_path']")
 LOGS_DIR=$(_setting "s.get('logs_dir', s['workspace_dir'] + '/logs')")
 
+# Host tool directories, bound at their own paths so environments and caches are shared
+# with the host and nothing accumulates under the quota-limited home. All optional (null).
+HOST_CONDA_ENVS_DIR=$(_setting "s.get('conda_envs_dir') or ''")
+HOST_CONDA_PKGS_DIR=$(_setting "s.get('conda_pkgs_dir') or ''")
+HOST_PIXI_HOME=$(_setting "s.get('pixi_home') or ''")
+HOST_CACHE_DIR=$(_setting "s.get('cache_dir') or ''")
+# Commit identity for the agent. An identity, not a credential: no push token exists in
+# the container; the user pushes from the host after the run.
+GIT_USER_NAME=$(_setting "s.get('git_user_name') or 'euler-agent'")
+GIT_USER_EMAIL=$(_setting "s.get('git_user_email') or 'euler-agent@noreply.invalid'")
+
 # Parse args
 AGENT="codex"
 TASK=""
@@ -127,7 +144,6 @@ EXTRA_BINDS=()
 EXTRA_READ_BINDS=()
 INTERACTIVE=false
 GPU=false
-GITHUB_AUTH=false
 NOTIFY_SUCCESS_OVERRIDE=""
 REMOTE_CONTROL=false
 CLAUDE_LOGIN=false
@@ -147,7 +163,6 @@ while [[ $# -gt 0 ]]; do
         --ref)               REF_DIR="$2";             shift 2 ;;
         --extra-bind)        EXTRA_BINDS+=("$2");      shift 2 ;;
         --extra-read-bind)   EXTRA_READ_BINDS+=("$2"); shift 2 ;;
-        --github-auth)       GITHUB_AUTH=true;         shift ;;
         --remote-control)    REMOTE_CONTROL=true;      shift ;;
         --claude-login)      CLAUDE_LOGIN=true;        shift ;;
         --gpu)               GPU=true;                 shift ;;
@@ -240,9 +255,6 @@ SECRETS_LOCAL="$REPO_DIR/config/secrets.local.env"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
-GITHUB_TOKEN="${GITHUB_TOKEN:-}"
-GIT_USER_NAME="${GIT_USER_NAME:-}"
-GIT_USER_EMAIL="${GIT_USER_EMAIL:-}"
 
 # Resolve workspace: named project (persistent, reused) or timestamped (one-off)
 if [[ -n "$PROJECT" ]]; then
@@ -252,9 +264,9 @@ else
 fi
 mkdir -p "$RUN_WORKSPACE"
 
-# Set up job-scoped tmpdir (scratch + conda caches)
+# Set up job-scoped tmpdir (becomes /tmp inside the container)
 JOB_TMPDIR="${TMPDIR:-/tmp}/euler-agents.${SLURM_JOB_ID:-$$}"
-mkdir -p "$JOB_TMPDIR/scratch" "$JOB_TMPDIR/conda_pkgs"
+mkdir -p "$JOB_TMPDIR/scratch"
 
 # Write task to job-specific scratch (not workspace) to avoid races on parallel jobs
 printf '%s' "$TASK" > "$JOB_TMPDIR/scratch/.task"
@@ -271,13 +283,58 @@ if [[ "$REMOTE_CONTROL" == true ]]; then
         cp -r "$SOURCE_HOME" "$JOB_HOME"
     else
         echo "Reusing persistent Claude home at $JOB_HOME (session transcripts live here)"
+        # A newer login in home-claude/ (from --claude-login, e.g. after switching
+        # accounts) supersedes the one stored here, so one login covers every project.
+        # Only the claude.ai credential and account are replaced; MCP authorisations in
+        # the same file are kept. Skipped when this home's credential is newer — it
+        # refreshes itself during sessions and must not be rolled back.
+        _src_cred="$SOURCE_HOME/.claude/.credentials.json"
+        _dst_cred="$JOB_HOME/.claude/.credentials.json"
+        if [[ -f "$_src_cred" && ( ! -f "$_dst_cred" || "$_src_cred" -nt "$_dst_cred" ) ]]; then
+            python3 - "$SOURCE_HOME" "$JOB_HOME" <<'PY'
+import json, os, sys
+src, dst = sys.argv[1], sys.argv[2]
+def load(p):
+    return json.load(open(p)) if os.path.exists(p) else {}
+s_cred, d_cred = load(f"{src}/.claude/.credentials.json"), load(f"{dst}/.claude/.credentials.json")
+if "claudeAiOauth" in s_cred:
+    d_cred["claudeAiOauth"] = s_cred["claudeAiOauth"]
+    os.makedirs(f"{dst}/.claude", exist_ok=True)
+    with open(f"{dst}/.claude/.credentials.json", "w") as f:
+        json.dump(d_cred, f)
+    os.chmod(f"{dst}/.claude/.credentials.json", 0o600)
+s_cfg, d_cfg = load(f"{src}/.claude.json"), load(f"{dst}/.claude.json")
+if "oauthAccount" in s_cfg:
+    d_cfg["oauthAccount"] = s_cfg["oauthAccount"]
+    with open(f"{dst}/.claude.json", "w") as f:
+        json.dump(d_cfg, f)
+PY
+            echo "Login:     refreshed from $SOURCE_HOME (newer claude.ai login)"
+        fi
     fi
 else
     JOB_HOME="$JOB_TMPDIR/home-${AGENT}"
     cp -r "$SOURCE_HOME" "$JOB_HOME"
 fi
 
-echo "Workspace: $RUN_WORKSPACE"
+# home-claude/.claude/CLAUDE.md is a symlink to the user's global ~/.claude/CLAUDE.md so the
+# agent inherits the same rules. The host home is never bound, so inside the container the
+# link would dangle and the rules would silently not load. Materialise it: copy the target
+# over the link on every launch — also into the persistent Remote Control home, so edits to
+# the global file propagate.
+_src_claude_md="$SOURCE_HOME/.claude/CLAUDE.md"
+if [[ -L "$_src_claude_md" ]]; then
+    _claude_md_target=$(readlink -f "$_src_claude_md")
+    if [[ -f "$_claude_md_target" ]]; then
+        mkdir -p "$JOB_HOME/.claude"
+        rm -f "$JOB_HOME/.claude/CLAUDE.md"
+        cp "$_claude_md_target" "$JOB_HOME/.claude/CLAUDE.md"
+    else
+        echo "WARNING: $_src_claude_md -> $_claude_md_target is missing; agent runs without a global CLAUDE.md" >&2
+    fi
+fi
+
+echo "Workspace: $RUN_WORKSPACE  (same path inside the container)"
 echo "Agent:     $AGENT"
 echo "Image:     $IMAGE_PATH"
 
@@ -288,9 +345,28 @@ SING_ENV=(
     --env "AGENT_MODEL=${MODEL:-}"
     --env "AGENT_MAX_BUDGET_USD=${MAX_BUDGET_USD:-}"
     --env "AGENT_EFFORT=${AGENT_EFFORT:-}"
-    --env "CONDA_ENVS_DIRS=/workspace/conda_envs:/opt/conda/envs"
-    --env "CONDA_PKGS_DIRS=/tmp/conda_pkgs"
+    --env "EULER_AGENTS_DIR=$REPO_DIR"
+    --env "AGENT_WORKSPACE=$RUN_WORKSPACE"
+    --env "GIT_USER_NAME=$GIT_USER_NAME"
+    --env "GIT_USER_EMAIL=$GIT_USER_EMAIL"
+    # New envs go to the project workspace; the host's envs (if configured) are visible
+    # read-only; the image's own envs come last.
+    --env "CONDA_ENVS_DIRS=$RUN_WORKSPACE/conda_envs${HOST_CONDA_ENVS_DIR:+:$HOST_CONDA_ENVS_DIR}:/opt/conda/envs"
+    --env "CONDA_PKGS_DIRS=${HOST_CONDA_PKGS_DIR:-/tmp/conda_pkgs}"
 )
+# Keep caches off the (quota-limited, unmounted anyway) home: XDG_CACHE_HOME covers pip,
+# uv, torch and Hugging Face (HF_HOME defaults to $XDG_CACHE_HOME/huggingface);
+# CUDA's JIT cache (~/.nv) has its own variable.
+if [[ -n "$HOST_CACHE_DIR" ]]; then
+    mkdir -p "$HOST_CACHE_DIR"
+    SING_ENV+=(
+        --env "XDG_CACHE_HOME=$HOST_CACHE_DIR"
+        --env "CUDA_CACHE_PATH=$HOST_CACHE_DIR/nv"
+    )
+fi
+# pixi: the host's static binary and global config (which redirects envs + cache) are
+# reached through the PIXI_HOME bind below; bin/container-env.sh puts it on PATH.
+[[ -n "$HOST_PIXI_HOME" ]] && SING_ENV+=(--env "PIXI_HOME=$HOST_PIXI_HOME")
 [[ -n "$OPENAI_API_KEY" ]]   && SING_ENV+=(--env "OPENAI_API_KEY=$OPENAI_API_KEY")
 
 # Anthropic auth (Claude only). Two modes; each withholds the other's credential
@@ -343,23 +419,39 @@ if [[ "$REMOTE_CONTROL" == true ]]; then
         --env "RC_SESSION_NAME=euler-rc-${PROJECT}-${SLURM_JOB_ID:-interactive}"
     )
 fi
-if [[ "$GITHUB_AUTH" == true ]]; then
-    [[ -z "$GITHUB_TOKEN" ]] && { echo "ERROR: --github-auth requires GITHUB_TOKEN in secrets.local.env" >&2; exit 1; }
-    SING_ENV+=(
-        --env "GIT_AUTH=true"
-        --env "GITHUB_TOKEN=$GITHUB_TOKEN"
-        --env "GIT_USER_NAME=${GIT_USER_NAME:-euler-agent}"
-        --env "GIT_USER_EMAIL=${GIT_USER_EMAIL:-euler-agent@localhost}"
-    )
-fi
 
+# Identity binds: every host directory appears at its own path inside the container, so
+# absolute paths, shebangs and conda prefixes the agent writes are valid on the host too.
+# Only /home and /tmp are container-private. The host home itself is never mounted.
 SING_BINDS=(
     --home "$JOB_HOME:/home"
-    --bind "$RUN_WORKSPACE:/workspace"
-    --bind "$REPO_DIR:/repo:ro"
+    --bind "$RUN_WORKSPACE:$RUN_WORKSPACE"
+    --bind "$REPO_DIR:$REPO_DIR:ro"
     --bind "$JOB_TMPDIR/scratch:/tmp"
 )
-[[ -n "$REF_DIR" ]] && SING_BINDS+=(--bind "$REF_DIR:/reference:ro")
+if [[ -n "$REF_DIR" ]]; then
+    [[ -e "$REF_DIR" ]] || { echo "ERROR: --ref directory does not exist: $REF_DIR" >&2; exit 1; }
+    REF_DIR=$(realpath -- "$REF_DIR")
+    SING_BINDS+=(--bind "$REF_DIR:$REF_DIR:ro")
+    echo "Reference: $REF_DIR  (read-only)"
+fi
+
+# Host tool dirs from settings. Conda envs read-only (usable, not modifiable — pass a
+# specific env via --extra-bind to allow installs into it); package cache and pixi home
+# read-write (shared caches; pixi's config.toml there redirects its envs and cache).
+_host_dir_bind() {  # $1 = host path, $2 = ro|rw, $3 = label for messages
+    [[ -n "$1" ]] || return 0
+    if [[ ! -d "$1" ]]; then
+        echo "WARNING: $3 '$1' does not exist on the host; not bound" >&2
+        return 0
+    fi
+    SING_BINDS+=(--bind "$1:$1:$2")
+    echo "Host $3: $1  ($2)"
+}
+_host_dir_bind "$HOST_CONDA_ENVS_DIR" ro "conda envs"
+_host_dir_bind "$HOST_CONDA_PKGS_DIR" rw "conda pkgs"
+_host_dir_bind "$HOST_PIXI_HOME"      rw "pixi home"
+_host_dir_bind "$HOST_CACHE_DIR"      rw "cache dir"
 
 # Turn an --extra-bind / --extra-read-bind SPEC into a singularity --bind value.
 #   SPEC = SRC[:DEST][:ro|rw],  $2 = default mode when SPEC omits one
@@ -410,7 +502,7 @@ _resolve_bind() {
 
 # Container-side destinations of every extra bind, collected so Remote Control can
 # pre-accept workspace trust for each of them (see below).
-BIND_DESTS=(/workspace)
+BIND_DESTS=("$RUN_WORKSPACE")
 
 for _spec in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do
     _resolved=$(_resolve_bind "$_spec" rw) || exit 1
@@ -425,53 +517,66 @@ for _spec in ${EXTRA_READ_BINDS[@]+"${EXTRA_READ_BINDS[@]}"}; do
     echo "Extra bind: $_resolved"
 done
 
-# Remote Control prompts for per-directory workspace trust and has no
-# --dangerously-skip-permissions escape hatch; trust is keyed by path in
-# ~/.claude.json. bin/inner.sh pre-accepts it for the headless path from inside the
-# container, but the interactive path never runs inner.sh — so pre-accept here, on
-# the host, where $JOB_HOME is just a directory. Covers /workspace and every extra
-# bind destination, since any of those may be the cwd when the session starts.
-if [[ "$REMOTE_CONTROL" == true ]]; then
-    python3 - "$JOB_HOME/.claude.json" "${BIND_DESTS[@]}" <<'PY'
+# Claude prompts for per-directory workspace trust the first time it starts in a
+# directory (Remote Control has no bypass flag for it at all); trust is keyed by path
+# in ~/.claude.json. bin/inner.sh pre-accepts it for the headless path from inside the
+# container, but the interactive path never runs inner.sh — and its home is a
+# throwaway copy, so the dialog would return every job. Pre-accept here for every
+# mode, on the host, where $JOB_HOME is just a directory. Covers the workspace and
+# every extra bind destination, since any of those may be the cwd when the session
+# starts. Destinations equal host paths, so trust granted here is for the real path.
+# The same file records the one-time onboarding (theme + login-method screens); a
+# throwaway home would replay it every job, so mark it done too. The
+# --dangerously-skip-permissions disclaimer is skipped when either
+# ~/.claude.json has bypassPermissionsModeAccepted (older versions) or
+# ~/.claude/settings.json has skipDangerousModePermissionPrompt (newer versions
+# migrate to this) — set both. These keys are Claude Code internals, not a public API.
+python3 - "$JOB_HOME/.claude.json" "$JOB_HOME/.claude/settings.json" "${BIND_DESTS[@]}" <<'PY'
 import json, os, sys
-path, dests = sys.argv[1], sys.argv[2:]
-d = json.load(open(path)) if os.path.exists(path) else {}
+cfg, settings, dests = sys.argv[1], sys.argv[2], sys.argv[3:]
+d = json.load(open(cfg)) if os.path.exists(cfg) else {}
 projects = d.setdefault("projects", {})
 for dest in dests:
     projects.setdefault(dest, {})["hasTrustDialogAccepted"] = True
-json.dump(d, open(path, "w"))
+d["hasCompletedOnboarding"] = True
+d["bypassPermissionsModeAccepted"] = True
+json.dump(d, open(cfg, "w"))
+os.makedirs(os.path.dirname(settings), exist_ok=True)
+s = json.load(open(settings)) if os.path.exists(settings) else {}
+s["skipDangerousModePermissionPrompt"] = True
+json.dump(s, open(settings, "w"), indent=2)
 PY
-    echo "Trust:     pre-accepted for ${BIND_DESTS[*]}"
-fi
+echo "Trust:     pre-accepted for ${BIND_DESTS[*]}"
 
 NV_FLAG=()
 [[ "$GPU" == true ]] && NV_FLAG=(--nv)
 
 if [[ "$INTERACTIVE" == true ]]; then
     echo "Opening interactive shell inside container..."
-    echo "  Workspace: /workspace  (persists at $RUN_WORKSPACE)"
+    echo "  Workspace: $RUN_WORKSPACE  (same path on the host)"
     [[ "$GPU" == true ]] && echo "  GPU mode enabled (--nv)"
     # `singularity exec bash --rcfile` rather than `singularity shell`, which has
     # no way to load an rcfile: bin/claude-shellrc is what makes the bare `claude`
     # and `codex` commands skip permission prompts, matching bin/inner.sh.
-    # --pwd starts the shell in /workspace.
+    # The repo is bound at its host path, so the rcfile is addressed by $REPO_DIR.
     singularity exec \
         --cleanenv --containall \
-        --pwd /workspace \
+        --pwd "$RUN_WORKSPACE" \
         "${NV_FLAG[@]+"${NV_FLAG[@]}"}" \
         "${SING_ENV[@]}" \
         "${SING_BINDS[@]}" \
         "$IMAGE_PATH" \
-        bash --rcfile /repo/bin/claude-shellrc -i
+        bash --rcfile "$REPO_DIR/bin/claude-shellrc" -i
 else
     AGENT_EXIT=0
     singularity exec \
         --cleanenv --containall \
+        --pwd "$RUN_WORKSPACE" \
         "${NV_FLAG[@]+"${NV_FLAG[@]}"}" \
         "${SING_ENV[@]}" \
         "${SING_BINDS[@]}" \
         "$IMAGE_PATH" \
-        /repo/bin/inner.sh || AGENT_EXIT=$?
+        "$REPO_DIR/bin/inner.sh" || AGENT_EXIT=$?
 
     NOTIFY_EMAIL_ENABLED=$(_setting "str(s.get('notifications', {}).get('email', {}).get('enabled', False)).lower()")
     NOTIFY_EMAIL_ADDRESS=$(_setting "s.get('notifications', {}).get('email', {}).get('address', '')")

@@ -1,16 +1,17 @@
 # Interactive rcfile for the in-container shell (euler-agent-run --interactive).
 #
-# Not sourced from the host: bin/euler-agent-run binds the repo read-only at
-# /repo, so this file is already inside the container at /repo/bin/claude-shellrc
-# and is passed to bash via --rcfile.
+# Not sourced from the host: bin/euler-agent-run binds the repo read-only at its
+# own host path, so this file is inside the container at $EULER_AGENTS_DIR/bin/
+# claude-shellrc and is passed to bash via --rcfile.
 #
 # Purpose: make the bare `claude` / `codex` commands behave the same way they do
 # on the non-interactive path in bin/inner.sh, which runs them with their
 # permission prompts bypassed. The container boundary is what contains the agent:
 # euler-agent-run uses --cleanenv --containall with explicit binds, so a bypassed
-# agent can still only reach /workspace, /home, /tmp and whatever was passed via
-# --extra-bind. /repo itself is bound read-only, so the agent cannot edit the
-# scripts that constrain it.
+# agent can still only reach the workspace, /home, /tmp, the host tool dirs from
+# settings and whatever was passed via --extra-bind — each at its host path. The
+# repo itself is bound read-only, so the agent cannot edit the scripts that
+# constrain it.
 #
 # The agents' own in-process sandboxes are not used because they do not work
 # under apptainer's user namespace; the flags below turn them off deliberately.
@@ -20,7 +21,9 @@
 # overwrite PS1 set here. Drop it so the prompt shows we are in this wrapper.
 unset PROMPT_COMMAND
 export PS1='(euler-agents) \w \$ '
-export HOME=/home
+
+# HOME, PATH, conda/cache dirs, git identity + hook — shared with bin/inner.sh.
+source "${EULER_AGENTS_DIR:?EULER_AGENTS_DIR not set}/bin/container-env.sh"
 
 # Claude Code. Management subcommands are passed through untouched — the bypass
 # flag changes their argument parsing, so `claude --version` and `claude mcp list`
@@ -75,13 +78,16 @@ if [[ -z "${EULER_AGENTS_RC_LOADED:-}" ]]; then
     export EULER_AGENTS_RC_LOADED=1
     printf '\n'
     printf 'euler-agents container shell\n'
-    printf '  claude / codex  are wrapped to skip permission prompts (see /repo/bin/claude-shellrc)\n'
+    printf '  claude / codex  are wrapped to skip permission prompts (see %s/bin/claude-shellrc)\n' "$EULER_AGENTS_DIR"
     printf '  command claude  runs the CLI unwrapped, with prompts enabled\n'
+    printf '  paths           every bound directory is at its host path; only ~ (/home) differs\n'
+    printf '  workspace       %s (persistent)\n' "$AGENT_WORKSPACE"
     if [[ "${REMOTE_CONTROL:-}" == "true" ]]; then
         printf '  claude-rc       start a Remote Control session (steer from claude.ai/code or mobile)\n'
-        printf '  /workspace      persistent, and so is /home — transcripts survive this job\n'
+        printf '  /home           persistent too — transcripts survive this job\n'
     else
-        printf '  /workspace      persistent; /home and /tmp are discarded when this job ends\n'
+        printf '  /home, /tmp     discarded when this job ends\n'
     fi
+    printf '  git             commit freely; there is no push credential — the user pushes from the host\n'
     printf '\n'
 fi
