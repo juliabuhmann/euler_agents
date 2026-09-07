@@ -3,7 +3,7 @@
 Copy this file to the directory the agent starts in (usually the read-write code bind) and
 rename it `CLAUDE.md`, then fill in the mount table for your session. Claude Code loads
 `CLAUDE.md` from the working directory and its parents, so it must live inside a bind — not
-in `/repo`, which is read-only and not an ancestor of the working directory.
+in the euler_agents repo, which is read-only and not an ancestor of the working directory.
 
 ---
 
@@ -11,17 +11,29 @@ You are running inside an Apptainer (Singularity) container on an ETH Euler comp
 The container is the sandbox: permission prompts are bypassed, so the mount table below is
 the actual boundary on what you can affect.
 
+## Paths are the same inside and outside
+
+Every bound directory is mounted **at its host path**. An absolute path you write into a
+script, a SLURM job file, a shebang or a conda prefix is therefore valid on the host as well.
+Do not invent translations; use the paths in the table as they are. The one exception is
+`~`, which is `/home`, a private agent home — never the user's real home (see below).
+
 ## Mounts
 
 Fill this in per session — it must match the `--extra-bind` / `--extra-read-bind` flags used
-to start the container (the launcher prints each resolved bind as `Extra bind: SRC:DEST:MODE`).
+to start the container (the launcher prints each resolved bind as `Extra bind: SRC:DEST:MODE`,
+and the host tool dirs as `Host ...: PATH (mode)`).
 
 | Path | Mode | What it is |
 |---|---|---|
-| `/workspace` | read-write | Persistent project dir on shared project storage. Put large outputs here. |
-| `/code` | read-write | Where source code belongs. Backed by a directory in the user's home. |
-| `/predictions` | **read-only** | Input data. Writes will fail; that is intentional. |
-| `/repo` | read-only | The euler_agents launcher scripts. Reference only. |
+| `/cluster/project/<group>/<user>/agentic_ai/workspaces/<project>` | read-write | The workspace and your starting directory, on project storage. Large outputs go here. |
+| `/cluster/home/<user>/src/<repo>` | read-write | The code repository you are working on. Backed by the user's home, which has a quota: source only, no data. |
+| `/cluster/project/<group>/<user>/<data>` | **read-only** | Input data. Writes will fail; that is intentional. |
+| `/cluster/project/<group>/<user>/conda/envs` | read-only | The user's conda environments. Activate them; do not install into them. |
+| `/cluster/project/<group>/<user>/conda/pkgs` | read-write | Shared conda package cache. |
+| `/cluster/project/<group>/<user>/pixi` | read-write | `PIXI_HOME`: the `pixi` binary and its global config (envs and cache redirected here). |
+| `/cluster/project/<group>/<user>/agentic_ai/cache` | read-write | `XDG_CACHE_HOME` and `CUDA_CACHE_PATH`: pip, uv, torch, Hugging Face and CUDA caches. |
+| `/cluster/home/<user>/src/euler_agents` | read-only | The launcher scripts. Reference only. |
 | `/home` | read-write | Agent state and credentials. Not the user's real home. |
 | `/tmp` | read-write | Node-local scratch, discarded when the job ends. |
 
@@ -30,30 +42,37 @@ was not bound — say so rather than working around it.
 
 ## Things that differ from a normal shell
 
-- **`~` is `/home`, not the user's host home.** Use the absolute paths from the mount table
-  above rather than tilde paths.
-- **The filesystem contains only what was bound.** A bound directory's parents exist as empty
-  mount points, so listing a parent shows only the bind, not what the host has there. Do not
-  conclude from this that files are missing or were deleted.
-- **There is no SLURM.** `sbatch`, `squeue` and `srun` are not installed, and `$SLURM_JOB_ID`
-  is unset. You cannot submit or query jobs. If work needs a batch job or a GPU allocation,
-  write the job script and ask the user to submit it from outside the container.
-- **No `sudo`.** `apt-get` exists but cannot install (no root). Use `conda`, `mamba`, or `uv`.
+- **`~` is `/home`, a private agent home.** It is not the user's host home and (unless this
+  is a Remote Control session) it is discarded when the job ends. Never put project files,
+  environments or caches there; the cache variables above already point elsewhere.
+- **A bound directory's parents look empty.** They exist only as mount points, so listing
+  `/cluster/project` shows just the pieces that were bound. Do not conclude from this that
+  files are missing or were deleted.
+- **There is no SLURM.** `sbatch`, `squeue` and `srun` are not installed. You cannot submit
+  or query jobs. If work needs a batch job or a GPU allocation, write the job script — with
+  the real paths, which need no translation — and ask the user to submit it from outside.
+- **No `sudo`.** `apt-get` exists but cannot install (no root). Use `conda`, `mamba`, `pixi`
+  or `uv`.
+- **No git credentials.** You can clone public repositories and commit in any read-write
+  bind, with a preset identity and a `Co-Authored-By` trailer. You cannot push; the user
+  reviews and pushes from the host after the run. Leave commits on a branch and say so.
 
 ## Available toolchain
 
-Verified present in the image: `conda` and `uv` at `/opt/conda/bin`, Python 3.13, `git` 2.43.
-`CONDA_ENVS_DIRS` is set to `/workspace/conda_envs:/opt/conda/envs`, so environments you
-create land on persistent project storage and survive the job.
+Verified present in the image: `conda`, `mamba` and `uv` at `/opt/conda/bin`, Python 3.13,
+`git` 2.43. `pixi` comes from the host through the `PIXI_HOME` bind when configured.
+`CONDA_ENVS_DIRS` is `<workspace>/conda_envs:<host conda envs>:/opt/conda/envs`: create new
+environments with plain `conda create -n NAME` and they land in the workspace at a path that
+also exists on the host; the user's existing environments are visible read-only.
 
 ## Where to write what
 
 - **Source code** → the read-write code bind. It is backed by the user's home directory, which
   has a quota — keep it to source, not data.
-- **Large or generated output** (figures, tables, intermediates, conda envs) → `/workspace`,
+- **Large or generated output** (figures, tables, intermediates, conda envs) → the workspace,
   which is on project storage.
 - **Scratch** → `/tmp`, and expect it to vanish.
 
 Prefer passing input and output locations in as arguments or environment variables rather than
-hardcoding them, so the same code runs against a different dataset, or outside the container,
-without editing.
+hardcoding them, so the same code runs against a different dataset without editing. When a
+path must be absolute, the host path in the table is the correct one, inside and outside.

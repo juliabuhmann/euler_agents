@@ -4,7 +4,8 @@
 
 Run Claude Code on Euler compute nodes. The agent runs inside a Singularity container — the
 container runtime available on HPC clusters — which isolates it from the host filesystem: it sees
-only the directories you explicitly mount.
+only the directories you explicitly mount, and it sees them **at their host paths**, so scripts,
+job files and conda environments the agent produces run unchanged outside the container.
 
 Two ways to use it:
 
@@ -18,9 +19,9 @@ read-only. Work alongside it in the terminal, or optionally hand the session to
 ```bash
 # on a node you hold, inside tmux — see the section for the node allocation
 bin/euler-agent-run --agent claude --project mywork --remote-control --interactive \
-    --extra-bind      /path/to/writable/dir:/code \
-    --extra-read-bind /path/to/readonly/data:/data
-# then inside the container:   cd /code && claude-rc
+    --extra-bind      /path/to/writable/dir \
+    --extra-read-bind /path/to/readonly/data
+# then inside the container:   cd /path/to/writable/dir && claude-rc
 ```
 
 **2. [Submit a task and wait](#use-case-2--submit-a-task-and-wait)** — you write the task up
@@ -128,7 +129,7 @@ cd ~/src/euler_agents
 bin/euler-agent-run --agent claude --project harness-test --interactive
 ```
 
-Inside the container you should land at a `(euler-agents) /workspace $` prompt. Then:
+Inside the container you should land at a `(euler-agents) <workspace_dir>/<project> $` prompt. Then:
 
 ```bash
 claude --version
@@ -194,8 +195,8 @@ tmux new -s agent
 ```bash
 cd /path/to/euler_agents
 bin/euler-agent-run --agent claude --project mywork --remote-control --interactive \
-    --extra-bind      /path/to/writable/dir:/code \
-    --extra-read-bind /path/to/readonly/data:/data
+    --extra-bind      /path/to/writable/dir \
+    --extra-read-bind /path/to/readonly/data
 ```
 
 Add `--gpu` if the agent needs the GPU inside the container. Pass only node-*use* flags here
@@ -205,8 +206,8 @@ Add `--gpu` if the agent needs the GPU inside the container. Pass only node-*use
 **5. Start the agent:**
 
 ```bash
-cd /code      # work where you want the code to end up
-claude-rc     # steerable session, permission prompts already disabled
+cd /path/to/writable/dir   # same path as on the host — work where the code should end up
+claude-rc                  # steerable session, permission prompts already disabled
 ```
 
 Detach from tmux with `Ctrl-b d`. To reconnect after a disconnect, SSH back to the **same** node
@@ -218,7 +219,7 @@ name and `--permission-mode bypassPermissions`. What `--remote-control` changes:
 - `--project` becomes **required**, and `/home` becomes persistent
   (`<workspace>/<project>/.claude-home`) so the login and the conversation transcripts survive
   the job ending.
-- Workspace trust is pre-accepted for `/workspace` and every bind destination, because
+- Workspace trust is pre-accepted for the workspace and every bind, because
   `claude remote-control` prompts for it and has no bypass flag.
 - It accepts **only** the stored claude.ai login from Setup step 4 — a `setup-token` or API key
   is rejected. `--model`, `--effort`, `--max-budget-usd` and `--auth` are ignored; you pick the
@@ -226,11 +227,11 @@ name and `--permission-mode bypassPermissions`. What `--remote-control` changes:
 
 The session dies when the SLURM job ends, so size the allocation in step 1 accordingly.
 
-**If the login was revoked**, `claude-rc` fails with a 401. Re-run
-`bin/euler-agent-run --claude-login`, then either run `claude auth login` inside the existing
-container (replaces the credential in place, keeps transcripts) or delete
-`<workspace>/<project>/.claude-home` so it re-seeds from the fresh login (which loses transcripts
-and any MCP authorizations, since they live in the same file).
+**If the login was revoked or you switched accounts**, `claude-rc` fails with a 401. Re-run
+`bin/euler-agent-run --claude-login` (delete `home-claude/.claude/.credentials.json` first if it
+refuses because a login already exists). The next launch of every project copies the newer
+login into that project's `.claude-home`, keeping its transcripts and MCP authorizations; a
+running container needs `claude auth login` inside instead.
 
 ### Mounting extra directories
 
@@ -238,28 +239,32 @@ Two flags, both repeatable, so any number of directories can be added in either 
 
 | Flag | Mode | Meaning |
 |---|---|---|
-| `--extra-bind SRC:DEST` | read-write | the agent can read and write here |
-| `--extra-read-bind SRC:DEST` | read-only | the agent can read but not modify; an explicit `:rw` is rejected rather than silently downgraded |
+| `--extra-bind SRC` | read-write | the agent can read and write here |
+| `--extra-read-bind SRC` | read-only | the agent can read but not modify; an explicit `:rw` is rejected rather than silently downgraded |
 
-`DEST` is where the directory appears inside the container and must be absolute. Pick short names
-that will not collide with the mount points the container already uses (`/home`, `/tmp`,
-`/workspace`, `/repo`). A bad spec — missing source, relative `DEST`, contradictory mode — fails
-before the container starts, with the reason.
+**Directories appear at their host path inside the container.** That is the default and the point:
+an absolute path, a shebang, a conda prefix or a SLURM script the agent writes inside is valid
+outside, so you never translate paths. `SRC:DEST` is still accepted for the rare case where you
+need a different name; `DEST` must then be absolute. A bad spec — missing source, relative
+`DEST`, contradictory mode — fails before the container starts, with the reason.
 
 What the agent can reach, and nothing else:
 
 | Path | Mode | Notes |
 |---|---|---|
-| `/workspace` | rw | project storage — large or generated output belongs here |
-| your binds | per flag | whatever you passed above |
-| `/home` | rw | agent state; persistent per project, or a throwaway copy in the terminal-only variant |
+| `<workspace_dir>/<project>` | rw | the workspace — project storage; large or generated output belongs here |
+| your binds | per flag | whatever you passed above, at the same paths |
+| host conda envs | **ro** | from `conda_envs_dir` in settings; usable, not modifiable |
+| host conda pkgs, pixi home, cache dir | rw | from settings; shared caches so nothing lands under the quota-limited home |
+| this repo | **ro** | the launcher scripts — the agent cannot edit what constrains it |
+| `/home` | rw | agent state; persistent per project, or a throwaway copy in the terminal-only variant. **Not** your home |
 | `/tmp` | rw | node-local scratch, discarded when the job ends |
-| `/repo` | **ro** | the launcher scripts — the agent cannot edit what constrains it |
 
-The host `$HOME` is not mounted and only `/etc/localtime` and `/etc/hosts` are system binds, so
+The host `$HOME` is never mounted and only `/etc/localtime` and `/etc/hosts` are system binds, so
 the blast radius is exactly the table above. That is what makes it reasonable to run with
 permission prompts bypassed: `bin/claude-shellrc` wraps `claude` and `codex` so the bare commands
-skip them.
+skip them. A bound directory's *parents* exist inside only as empty mount points, so listing
+`/cluster/project` shows just the pieces that were bound.
 
 ### Terminal only, without steering
 
@@ -268,10 +273,10 @@ Everything else is the same, and you start the agent with plain `claude` instead
 
 ```bash
 bin/euler-agent-run --agent claude --project mywork --interactive \
-    --extra-bind      /path/to/writable/dir:/code \
-    --extra-read-bind /path/to/readonly/data:/data
+    --extra-bind      /path/to/writable/dir \
+    --extra-read-bind /path/to/readonly/data
 # inside the container:
-cd /code
+cd /path/to/writable/dir
 claude
 ```
 
@@ -329,10 +334,10 @@ euler-agent-submit --agent claude --project myanalysis \
 euler-agent-submit --agent claude --task-file tasks/myjob.md
 euler-agent-submit --agent claude
 
-# Mount extra directories, exactly as in use case 1
+# Mount extra directories, exactly as in use case 1 (same path inside and outside)
 euler-agent-submit --agent claude --project myanalysis \
-    --extra-read-bind /path/to/readonly/data:/data \
-    --task "Summarise the files in /data"
+    --extra-read-bind /path/to/readonly/data \
+    --task "Summarise the files in /path/to/readonly/data"
 
 # Override the job time limit
 euler-agent-submit --agent claude --task "..." --time 8:00:00
@@ -366,7 +371,7 @@ euler-agent-submit --agent claude --preset medium-gpu --project mygpuproject --t
 # GPU with an explicit type and VRAM filter
 euler-agent-submit --agent claude --gpu \
     --gpu-type nvidia_a100_80gb_pcie --gpu-mem 80g \
-    --project mygpuproject --task "Train the model in train.py, checkpoints to /workspace/"
+    --project mygpuproject --task "Train the model in train.py, checkpoints to a checkpoints/ subdir of the workspace"
 
 # CPU sizing
 euler-agent-submit --agent claude --cpus 4 --mem-per-cpu 8G --task "..."
@@ -414,7 +419,8 @@ These apply to both use cases unless noted.
 
 ### Named projects and persistent workspaces
 
-The workspace is mounted as `/workspace`. Without `--project`, each run gets a fresh timestamped
+The workspace is mounted at its host path, `<workspace_dir>/<project>`, and is the agent's
+starting directory. Without `--project`, each run gets a fresh timestamped
 directory. With `--project NAME`, every run for that project shares
 `<workspace_dir>/NAME` — useful for multi-step work where later runs build on earlier results.
 `--remote-control` requires it.
@@ -437,21 +443,35 @@ On a subscription the budget is enforced against the notional cost above. It sti
 spend, which is a proxy for quota use, even though no money is charged. None of these three
 apply to `--remote-control`, where the model is chosen per session in the app.
 
-### Conda environments
+### Conda, pixi and caches — sharing the host's environments, sparing the home quota
 
-`CONDA_ENVS_DIRS` is preset to `/workspace/conda_envs:/opt/conda/envs`, so environments the
-agent creates land on persistent project storage and are reusable across runs in the same
-project.
+Four optional settings bind the host's tool directories into the container at their own paths:
+
+| Setting | Bound | Effect inside the container |
+|---|---|---|
+| `conda_envs_dir` | **ro** | your existing conda envs are visible and activatable; installs into them fail (bind one rw with `--extra-bind` if you want that) |
+| `conda_pkgs_dir` | rw | conda/mamba reuse the host package cache instead of re-downloading into `/tmp` |
+| `pixi_home` | rw | the host's `pixi` binary is on `PATH`, and its `config.toml` there (cache root, `detached-environments`) applies, so `pixi install` in a bound repo puts the env where it goes on the host |
+| `cache_dir` | rw | `XDG_CACHE_HOME` (pip, uv, torch, Hugging Face) and `CUDA_CACHE_PATH` point here |
+
+`CONDA_ENVS_DIRS` is `<workspace>/conda_envs:<conda_envs_dir>:/opt/conda/envs`: new environments
+land in the project workspace, at a path that exists on the host, so an env built by the agent
+activates on the host (and vice versa). Because every path is identical, shebangs and prefixes
+baked into an env are correct on both sides.
+
+Nothing accumulates under `~`: the host home is never mounted, `~` inside is the per-job agent
+home, and the caches above go to project storage. Set the four values in
+`config/settings.local.json` to match your host setup (they mirror `~/.condarc` and `$PIXI_HOME`).
 
 ```bash
 euler-agent-submit --agent claude --project myproject \
     --task "Create a conda environment 'myenv' with python=3.11 and numpy, then verify it."
 ```
 
-To inspect one by hand, start an interactive container and activate it:
+To inspect one by hand, on the host or in an interactive container, activate it by path:
 
 ```bash
-source /opt/conda/etc/profile.d/conda.sh && conda activate myenv
+conda activate <workspace_dir>/myproject/conda_envs/myenv
 ```
 
 `uv` is also in the image, at `/opt/conda/bin/uv`.
@@ -463,47 +483,34 @@ driver and devices to the agent. It works on both paths. In use case 2 it *also*
 `euler-agent-submit` request a GPU node; in use case 1 the node already has the GPU from your
 own allocation, and `--gpu` only affects the container.
 
-### GitHub access
+### Git: the agent commits, you push
 
-By default the agent has no GitHub credentials — it can clone public repos anonymously but
-cannot push, commit to private repos, or open pull requests. Add `--github-auth` when the task
-needs any of those.
+The container holds **no git credentials**, by design. With permission prompts off and outbound
+network open, a token in the container could be exfiltrated by prompt injection in a cloned
+repo or a data file, and a single wrong `git push --force` on the wrong repo has no undo. So:
 
-> **Currently works only on the submitted and auto-start paths.** The `git config` that makes
-> the token usable runs in `bin/inner.sh`, which the `--interactive` path does not execute — so
-> in a use-case-1 shell the token is present in the environment but git will not authenticate
-> and commits have no configured identity.
+- **Inside** the agent can `git clone` public repos, and `git commit` freely in any read-write
+  bind. Commits are attributed to `git_user_name` / `git_user_email` from settings (default
+  `euler-agent`, override in `config/settings.local.json` if you want your own identity) and
+  carry a `Co-Authored-By` trailer naming the agent and model, added by
+  `config/git-hooks/commit-msg`:
 
-**1. Create a fine-grained PAT** at [github.com/settings/tokens](https://github.com/settings/tokens).
-Required permissions: **Contents** (read/write), **Pull requests** (read/write).
+  ```
+  Co-Authored-By: Claude (claude-opus-4-8) <noreply@anthropic.com>
+  ```
 
-**2. Add credentials to `config/secrets.local.env`** (gitignored, auto-loaded):
+- **Outside**, when the run is done, you review and push from the host with your own
+  credentials:
 
-```bash
-cat >> config/secrets.local.env <<'EOF'
-GITHUB_TOKEN=github_pat_...
-GIT_USER_NAME="Your Name"
-GIT_USER_EMAIL="you@example.com"
-EOF
-chmod 600 config/secrets.local.env
-```
+  ```bash
+  cd /path/to/writable/dir        # the same path the agent worked in
+  git log --oneline origin/main..  # what the agent committed
+  git push
+  ```
 
-No changes to the Singularity image are needed. Then:
-
-```bash
-euler-agent-submit --agent claude --github-auth \
-    --repo https://github.com/your-org/private-repo \
-    --project myproject \
-    --task "Refactor the data loader, commit, and push to a new branch."
-```
-
-What it enables inside the container: authenticated clone/fetch/push/pull for all
-`https://github.com/` URLs, commits attributed to `GIT_USER_NAME` / `GIT_USER_EMAIL`, and a
-`Co-Authored-By` trailer identifying the agent and model on every commit:
-
-```
-Co-Authored-By: Claude (claude-sonnet-4-6) <noreply@anthropic.com>
-```
+For a **private repo**, clone it on the host first (into the workspace or anywhere you then pass
+with `--extra-bind`); `--repo URL` inside the container works for public URLs only. Both paths,
+headless and interactive, get the same identity and hook via `bin/container-env.sh`.
 
 ---
 
@@ -515,10 +522,11 @@ The agent runs inside a Singularity container with `--cleanenv --containall`:
 
 | | Detail |
 |---|---|
-| Host filesystem | No access — only the explicitly bound directories are visible |
-| Home directory | Not mounted; the container gets its own isolated `$HOME` |
-| Harness repo | Mounted read-only (`/repo:ro`) — the agent cannot modify the scripts that launched it |
-| Read-only mounts | `--extra-read-bind` and `--ref` are enforced by the kernel, not by the agent's cooperation |
+| Host filesystem | No access — only the explicitly bound directories are visible, each at its host path |
+| Home directory | Never mounted; the container gets its own `/home`, so nothing lands under your quota |
+| Harness repo | Mounted read-only at its own path — the agent cannot modify the scripts that launched it |
+| Read-only mounts | `--extra-read-bind`, `--ref` and the host conda envs are enforced by the kernel, not by the agent's cooperation |
+| Git | No token in the container; the agent can only commit locally |
 | Parallel jobs | Each job gets a private tmpdir; jobs don't interfere with each other |
 | Privilege | Runs as your own UID — no root, no escalation possible |
 
@@ -526,11 +534,13 @@ What it does **not** protect against:
 
 - **Unrestricted execution.** All confirmation prompts are disabled — the agent runs arbitrary
   code inside the container without approval.
-- **Mutations to anything mounted read-write.** Full write access to `/workspace` and every
-  `--extra-bind` target; it can delete prior results. No undo. Mount read-only when in doubt.
+- **Mutations to anything mounted read-write.** Full write access to the workspace, every
+  `--extra-bind` target, the conda package cache and the pixi home; it can delete prior
+  results. No undo. Mount read-only when in doubt.
 - **Outbound network.** The container has internet access and can call external services.
-- **Credential exposure.** Tokens are injected as env vars and could be exfiltrated via prompt
-  injection in a cloned repo or a data file.
+- **Credential exposure.** The Claude login (or an injected API key / token, if you chose
+  `--auth apikey|subscription`) is inside the container and could be exfiltrated via prompt
+  injection in a cloned repo or a data file. No other credential is present.
 - **Quota overruns.** On a subscription the harness cannot see your real rate-limit consumption.
 
 Treat anything you pass to the agent the way you would treat code you are about to `bash -c` on
@@ -540,10 +550,10 @@ a compute node.
 
 | File | Tracked | Holds |
 |---|---|---|
-| `config/settings.json` | yes | committed defaults: image path, workspace dirs, SLURM sizes, per-agent model/budget/auth |
+| `config/settings.json` | yes | committed defaults: image path, workspace dirs, host tool dirs (`conda_envs_dir`, `conda_pkgs_dir`, `pixi_home`, `cache_dir`), git identity, SLURM sizes, per-agent model/budget/auth |
 | `config/settings.local.json` | no | your overrides; merged over `settings.json` **shallowly** (a top-level key replaces the whole block) |
 | `config/secrets.env` | no | template for credentials |
-| `config/secrets.local.env` | no | real credentials: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, `GIT_USER_*` |
+| `config/secrets.local.env` | no | real credentials: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` (only needed for `--auth subscription|apikey`) |
 | `config/task.json` | yes | default task plus model/effort/budget/repo/project, used when no `--task`/`--task-file` is given |
 | `config/presets.json` | yes | named SLURM size presets for `euler-agent-submit --preset` |
 | `config/agent-CLAUDE.md.template` | yes | environment description to copy into a bind as the agent's `CLAUDE.md` |
@@ -552,7 +562,8 @@ a compute node.
 
 The container surprises an agent in ways worth spelling out for it: `~` is `/home` and not your
 host home, there are no SLURM binaries so it cannot submit jobs, and the filesystem contains only
-what you bound. `config/agent-CLAUDE.md.template` documents all of that plus the mount table.
+what you bound (at host paths, so absolute paths in scripts are fine). `config/agent-CLAUDE.md.template`
+documents all of that plus the mount table.
 
 Copy it into a read-write bind and edit its mount table to match the binds you used:
 
@@ -560,9 +571,11 @@ Copy it into a read-write bind and edit its mount table to match the binds you u
 cp config/agent-CLAUDE.md.template /path/to/writable/dir/CLAUDE.md
 ```
 
-It has to live inside a directory that is an ancestor of where the agent runs — `/repo` is
-read-only and not an ancestor, so it will not be picked up from there. This is manual for now;
-nothing copies it for you.
+It has to live inside a directory that is an ancestor of where the agent runs — this repo is bound
+read-only and is not an ancestor, so it will not be picked up from there. This is manual for now;
+nothing copies it for you. Your global `~/.claude/CLAUDE.md` *is* loaded: the launcher copies it
+into the agent home on every launch (the `home-claude/.claude/CLAUDE.md` symlink would otherwise
+dangle inside the container).
 
 ### GPUs, partitions and Slurm accounts
 
@@ -615,14 +628,15 @@ singularity build --fakeroot \
 | `bin/euler-agent-submit` | login node | writes and submits the SLURM job, or `srun --pty` for an interactive one; forwards everything else to `euler-agent-run` |
 | `slurm/run-agent.sh` | compute node | thin SLURM wrapper that calls `euler-agent-run` |
 | `bin/euler-agent-run` | compute or login node | resolves config, sets up the workspace, tmpdir and home, then starts Singularity. This is the only script that launches a container, and it needs no SLURM |
+| `bin/container-env.sh` | inside container | sourced by both entrypoints: `HOME`/`PATH`, conda and cache dirs, git identity and hook — so the two paths cannot drift |
 | `bin/inner.sh` | inside container | the non-interactive entrypoint: runs the task headless or starts Remote Control, then parses cost and writes `REPORT.md` |
 | `bin/claude-shellrc` | inside container | the interactive entrypoint's rcfile: wraps `claude`/`codex` to skip permission prompts and adds `claude-rc` |
 | `bin/notify.sh` | compute node | sends the completion email after a submitted run |
 
 The `--interactive` and headless paths diverge at the end of `euler-agent-run`: interactive
-starts `bash --rcfile /repo/bin/claude-shellrc`, headless starts `/repo/bin/inner.sh`. Anything
-`inner.sh` does — cost reporting, `REPORT.md`, git credential setup, notifications — therefore
-does not happen in an interactive session.
+starts `bash --rcfile bin/claude-shellrc`, headless starts `bin/inner.sh` (both addressed through
+the repo's host path, which is where it is bound). What `inner.sh` adds on top of the shared
+setup — cost reporting, `REPORT.md`, notifications — does not happen in an interactive session.
 
 ### Using a token or API key instead
 
