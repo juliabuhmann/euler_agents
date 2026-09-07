@@ -23,6 +23,8 @@ JOB_ID="${SLURM_JOB_ID:-interactive}"
 if [[ "${REMOTE_CONTROL:-}" == "true" ]]; then
     RC_NAME="${RC_SESSION_NAME:-euler-rc}"
     cd /workspace
+    # Attribute commits to the agent (same hook the one-shot path uses at line 32).
+    git config --global core.hooksPath /repo/config/git-hooks
     if [[ "$GIT_AUTH" == "true" ]]; then
         git config --global user.name  "$GIT_USER_NAME"
         git config --global user.email "$GIT_USER_EMAIL"
@@ -63,6 +65,28 @@ TASK=$(cat /tmp/.task)
 [[ -z "$TASK" ]] && { echo "ERROR: task is empty" >&2; exit 1; }
 
 TASK_WITH_FOOTER="${TASK}
+
+---
+## No resumption — wait synchronously, but poll cheaply
+
+This job runs unattended via a single non-interactive invocation and is **not resumable**.
+There is no external monitor, notification, or \"wakeup\" mechanism that will resume this
+session later, regardless of what tools appear to be available to you — once you stop
+producing output, the SLURM job exits and the container is torn down immediately, killing
+any process still running in it (backgrounded or not). Never end your turn while a step
+you launched is still in flight, assuming something else will pick it back up — nothing
+will.
+
+A single call that blocks for a long time can also hit this environment's own command
+timeout before your SLURM wall-clock limit is reached, so:
+- Short steps (a few minutes): run in the plain foreground, output redirected to a log
+  file — don't stream large output into your own context.
+- Longer steps (installs, downloads, GPU inference): start in the background with output
+  redirected to a log file, then poll yourself in a loop *within this same turn* — sleep a
+  reasonable interval (tens of seconds to a few minutes, not tight busy-polling), check the
+  process is still alive, tail/grep the log for progress or errors, repeat until it
+  actually finishes. Only read log tails/greps, never full logs, to keep each poll cheap.
+- Either way: do not end your turn while something you started is still running.
 
 ---
 After completing the above task, write a concise summary (max 20 lines) to /tmp/run-summary.txt covering:
