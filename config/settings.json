@@ -2,6 +2,12 @@
   "workspace_dir": "/cluster/project/<group>/<username>/workspaces",
   "logs_dir": "/cluster/project/<group>/<username>/logs",
   "image_path": "/cluster/project/beltrao/jbuhmann/agentic_ai/images/euler-agents-20260622.sif",
+  "conda_envs_dir": null,
+  "conda_pkgs_dir": null,
+  "pixi_home": null,
+  "cache_dir": null,
+  "git_user_name": "euler-agent",
+  "git_user_email": "euler-agent@noreply.invalid",
   "slurm": {
     "time": "4:00:00",
     "mem_per_cpu": "8G",
