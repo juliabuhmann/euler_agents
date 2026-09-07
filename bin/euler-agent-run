@@ -48,6 +48,10 @@ OPTIONS
                               It must be absolute (that distinguishes SRC:DEST from SRC:MODE).
   --extra-read-bind SPEC      Same, but READ-ONLY. Repeatable. Passing an explicit ':rw' here
                               is an error rather than a silent downgrade.
+  --binds-file FILE           Read binds from FILE, one SPEC per line (same syntax; mode defaults
+                              to ro; '#' starts a comment). Relative SRC paths resolve against
+                              the file's directory, so a repo can ship its own file with '.:rw'.
+                              Repeatable. An --extra-bind for the same destination wins.
   --interactive               Open an interactive shell inside the container instead of running
   --claude-login              One-time: run 'claude auth login' with home-claude/ writable to
                               obtain the full-scope OAuth login Remote Control requires. Run this
@@ -142,6 +146,7 @@ PROJECT=""
 REF_DIR=""
 EXTRA_BINDS=()
 EXTRA_READ_BINDS=()
+BIND_FILES=()
 INTERACTIVE=false
 GPU=false
 NOTIFY_SUCCESS_OVERRIDE=""
@@ -163,6 +168,7 @@ while [[ $# -gt 0 ]]; do
         --ref)               REF_DIR="$2";             shift 2 ;;
         --extra-bind)        EXTRA_BINDS+=("$2");      shift 2 ;;
         --extra-read-bind)   EXTRA_READ_BINDS+=("$2"); shift 2 ;;
+        --binds-file)        BIND_FILES+=("$2");       shift 2 ;;
         --remote-control)    REMOTE_CONTROL=true;      shift ;;
         --claude-login)      CLAUDE_LOGIN=true;        shift ;;
         --gpu)               GPU=true;                 shift ;;
@@ -429,10 +435,14 @@ SING_BINDS=(
     --bind "$REPO_DIR:$REPO_DIR:ro"
     --bind "$JOB_TMPDIR/scratch:/tmp"
 )
+# Every container-side mount destination, so a --binds-file entry can never mount a
+# second time over something already bound (the launcher's own binds included).
+MOUNTED_DESTS=("$RUN_WORKSPACE" "$REPO_DIR" /home /tmp)
 if [[ -n "$REF_DIR" ]]; then
     [[ -e "$REF_DIR" ]] || { echo "ERROR: --ref directory does not exist: $REF_DIR" >&2; exit 1; }
     REF_DIR=$(realpath -- "$REF_DIR")
     SING_BINDS+=(--bind "$REF_DIR:$REF_DIR:ro")
+    MOUNTED_DESTS+=("$REF_DIR")
     echo "Reference: $REF_DIR  (read-only)"
 fi
 
@@ -446,6 +456,7 @@ _host_dir_bind() {  # $1 = host path, $2 = ro|rw, $3 = label for messages
         return 0
     fi
     SING_BINDS+=(--bind "$1:$1:$2")
+    MOUNTED_DESTS+=("$1")
     echo "Host $3: $1  ($2)"
 }
 _host_dir_bind "$HOST_CONDA_ENVS_DIR" ro "conda envs"
@@ -453,13 +464,14 @@ _host_dir_bind "$HOST_CONDA_PKGS_DIR" rw "conda pkgs"
 _host_dir_bind "$HOST_PIXI_HOME"      rw "pixi home"
 _host_dir_bind "$HOST_CACHE_DIR"      rw "cache dir"
 
-# Turn an --extra-bind / --extra-read-bind SPEC into a singularity --bind value.
-#   SPEC = SRC[:DEST][:ro|rw],  $2 = default mode when SPEC omits one
+# Turn a bind SPEC into a singularity --bind value.
+#   SPEC = SRC[:DEST][:ro|rw],  $2 = default mode when SPEC omits one,
+#   $3 = "strict" to reject an explicit mode that differs from $2 (--extra-read-bind)
 # DEST is required to be absolute, which is what disambiguates SRC:DEST from
 # SRC:MODE without guessing. Prints the resolved spec; returns non-zero on a bad
 # spec (the caller must check — an `exit` here would only leave the subshell).
 _resolve_bind() {
-    local spec="$1" want_mode="$2"
+    local spec="$1" want_mode="$2" strict="${3:-}"
     local -a f=()
     IFS=':' read -r -a f <<< "$spec"
     local src="${f[0]}" dest="" mode=""
@@ -491,7 +503,7 @@ _resolve_bind() {
     fi
     # Refuse to silently downgrade: an explicit :rw on the read-only flag is a
     # contradiction, so say so instead of quietly mounting it read-only.
-    if [[ "$want_mode" == ro && "$mode" == rw ]]; then
+    if [[ "$strict" == strict && "$want_mode" == ro && "$mode" == rw ]]; then
         echo "ERROR: '$spec' asks for rw but was passed to --extra-read-bind." >&2
         echo "       Use --extra-bind for read-write access." >&2
         return 1
@@ -508,14 +520,70 @@ for _spec in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do
     _resolved=$(_resolve_bind "$_spec" rw) || exit 1
     SING_BINDS+=(--bind "$_resolved")
     BIND_DESTS+=("$(cut -d: -f2 <<< "$_resolved")")
+    MOUNTED_DESTS+=("$(cut -d: -f2 <<< "$_resolved")")
     echo "Extra bind: $_resolved"
 done
 for _spec in ${EXTRA_READ_BINDS[@]+"${EXTRA_READ_BINDS[@]}"}; do
-    _resolved=$(_resolve_bind "$_spec" ro) || exit 1
+    _resolved=$(_resolve_bind "$_spec" ro strict) || exit 1
     SING_BINDS+=(--bind "$_resolved")
     BIND_DESTS+=("$(cut -d: -f2 <<< "$_resolved")")
+    MOUNTED_DESTS+=("$(cut -d: -f2 <<< "$_resolved")")
     echo "Extra bind: $_resolved"
 done
+
+# Binds from --binds-file, after the explicit flags so a flag for the same
+# destination wins (e.g. to make a file's read-only entry writable for one run).
+# One SPEC per line, '#' comments, blank lines ignored. A relative SRC (including
+# '.') is taken relative to the file's directory, so a repository can carry its own
+# binds file and declare itself with '.:rw'. A leading '~/' means the host home.
+for _file in ${BIND_FILES[@]+"${BIND_FILES[@]}"}; do
+    [[ -f "$_file" ]] || { echo "ERROR: --binds-file not found: $_file" >&2; exit 1; }
+    _file=$(realpath -- "$_file")
+    _base=$(dirname "$_file")
+    while IFS= read -r _line || [[ -n "$_line" ]]; do
+        _line="${_line%%#*}"
+        _line="$(printf '%s' "$_line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        [[ -n "$_line" ]] || continue
+        _src="${_line%%:*}"
+        _rest="${_line#"$_src"}"
+        case "$_src" in
+            /*)  ;;
+            '~'|'~/'*) _src="$HOME${_src#\~}" ;;
+            *)   _src="$_base/$_src" ;;
+        esac
+        _resolved=$(_resolve_bind "$_src$_rest" ro) || { echo "       (in $_file)" >&2; exit 1; }
+        _dest=$(cut -d: -f2 <<< "$_resolved")
+        _dup=false
+        for _d in "${MOUNTED_DESTS[@]}"; do [[ "$_d" == "$_dest" ]] && _dup=true; done
+        if [[ "$_dup" == true ]]; then
+            echo "Binds file: $_dest is already mounted, skipping this entry"
+            continue
+        fi
+        SING_BINDS+=(--bind "$_resolved")
+        BIND_DESTS+=("$_dest")
+        MOUNTED_DESTS+=("$_dest")
+        echo "Binds file: $_resolved"
+    done < "$_file"
+done
+
+# Per-session briefing for the agent: the generic text from config/agent-briefing.md
+# plus the actual mount table of this run. Lands in the job scratch, i.e. at
+# /tmp/agent-briefing.md inside the container, where an interactive user can paste it
+# or start with `claude "$(cat /tmp/agent-briefing.md)"`.
+{
+    cat "$REPO_DIR/config/agent-briefing.md"
+    printf '\n## Mounts in this session\n\n'
+    printf 'Workspace and starting directory: `%s`\n\n' "$RUN_WORKSPACE"
+    printf '| Path inside = on the host | Mode |\n|---|---|\n'
+    for ((_i = 0; _i < ${#SING_BINDS[@]}; _i++)); do
+        [[ "${SING_BINDS[$_i]}" == --bind ]] || continue
+        IFS=':' read -r _bsrc _bdest _bmode <<< "${SING_BINDS[$((_i + 1))]}"
+        [[ "$_bdest" == /tmp ]] && continue   # container-private scratch, listed below
+        printf '| `%s` | %s |\n' "$_bdest" "${_bmode:-rw}"
+    done
+    printf '| `/home` | rw, private agent home (`~`), not the user'"'"'s home |\n'
+    printf '| `/tmp` | rw, node-local scratch, gone after the job |\n'
+} > "$JOB_TMPDIR/scratch/agent-briefing.md"
 
 # Claude prompts for per-directory workspace trust the first time it starts in a
 # directory (Remote Control has no bypass flag for it at all); trust is keyed by path

@@ -1,0 +1,12 @@
+# Example binds file for `euler-agent-run --binds-file FILE` (also accepted by
+# euler-agent-submit). Copy it into a repository, e.g. as `euler-agents.binds`,
+# edit, and pass its path; every entry is mounted at its host path.
+#
+# One SRC[:DEST][:ro|rw] per line. Mode defaults to ro. '#' starts a comment.
+# A relative SRC is taken relative to THIS file's directory, so '.' is the
+# repository that carries the file. '~/' means the host home.
+# An --extra-bind / --extra-read-bind flag for the same destination wins.
+
+.:rw                                                  # this repository: code, read-write
+/cluster/project/<group>/<user>/<dataset>:ro          # input data, read-only
+# /cluster/project/<group>/<user>/<results>:rw        # outputs, read-write

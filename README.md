@@ -242,6 +242,25 @@ Two flags, both repeatable, so any number of directories can be added in either 
 | `--extra-bind SRC` | read-write | the agent can read and write here |
 | `--extra-read-bind SRC` | read-only | the agent can read but not modify; an explicit `:rw` is rejected rather than silently downgraded |
 
+A repository can carry its own list instead, so you stop retyping it: put a file such as
+`euler-agents.binds` in the repo (start from `config/binds.example`) and pass it with
+`--binds-file`, in either use case:
+
+```
+# euler-agents.binds — one SRC[:DEST][:ro|rw] per line, mode defaults to ro
+.:rw                                              # this repo, read-write
+/cluster/project/<group>/<user>/mydata:ro         # input data
+```
+
+```bash
+bin/euler-agent-run --agent claude --project mywork --interactive \
+    --binds-file ~/src/myrepo/euler-agents.binds
+```
+
+Relative entries resolve against the file's directory, so `.` is the repo itself. A flag for
+the same destination wins, so `--extra-bind /…/mydata` makes a read-only entry writable for one
+run. Missing sources and malformed lines are errors, reported with the file name.
+
 **Directories appear at their host path inside the container.** That is the default and the point:
 an absolute path, a shebang, a conda prefix or a SLURM script the agent writes inside is valid
 outside, so you never translate paths. `SRC:DEST` is still accepted for the rare case where you
@@ -560,22 +579,41 @@ a compute node.
 
 ### Telling the agent about its environment
 
-The container surprises an agent in ways worth spelling out for it: `~` is `/home` and not your
-host home, there are no SLURM binaries so it cannot submit jobs, and the filesystem contains only
-what you bound (at host paths, so absolute paths in scripts are fine). `config/agent-CLAUDE.md.template`
-documents all of that plus the mount table.
+The agent does not know by itself that it is in a container on a cluster. The things that
+surprise it: `~` is `/home` and not your host home, there are no SLURM binaries so it cannot
+submit jobs, and the filesystem contains only what you bound. Three ways to tell it, from
+least to most effort:
 
-Copy it into a read-write bind and edit its mount table to match the binds you used:
+**1. Start the session with the generated briefing (interactive).** Every launch writes
+`/tmp/agent-briefing.md` inside the container. It contains a short generic explanation of the
+environment (from `config/agent-briefing.md`) followed by a table of this run's actual mounts and
+their modes. Hand it to the agent as the first message:
 
 ```bash
-cp config/agent-CLAUDE.md.template /path/to/writable/dir/CLAUDE.md
+claude "$(cat /tmp/agent-briefing.md)"
 ```
 
-It has to live inside a directory that is an ancestor of where the agent runs — this repo is bound
-read-only and is not an ancestor, so it will not be picked up from there. This is manual for now;
-nothing copies it for you. Your global `~/.claude/CLAUDE.md` *is* loaded: the launcher copies it
-into the agent home on every launch (the `home-claude/.claude/CLAUDE.md` symlink would otherwise
-dangle inside the container).
+The container shell's banner reminds you of this command.
+
+**2. Paste `config/agent-briefing.md` by hand.** Same text as option 1 without the mount table.
+Useful when you are already inside a session.
+
+**3. Put a `CLAUDE.md` into the repository the agent works in (permanent).** Claude Code
+loads `CLAUDE.md` automatically from its working directory and that directory's parents, so a
+file committed to the repo is picked up in every session started there, without pasting
+anything. `config/agent-CLAUDE.md.template` is a starting point for such a file: the same
+explanation as the briefing, plus a mount table you fill in once for that repo. Copy it and edit
+the table:
+
+```bash
+cp config/agent-CLAUDE.md.template /cluster/home/<user>/src/myrepo/CLAUDE.md
+```
+
+Placing it in this `euler_agents` repo would not work: it is mounted read-only and is not a
+parent of the agent's working directory.
+
+Independently of these, your own global `~/.claude/CLAUDE.md` is loaded in every run: the
+launcher copies it into the agent home at launch.
 
 ### GPUs, partitions and Slurm accounts
 

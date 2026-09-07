@@ -89,5 +89,7 @@ if [[ -z "${EULER_AGENTS_RC_LOADED:-}" ]]; then
         printf '  /home, /tmp     discarded when this job ends\n'
     fi
     printf '  git             commit freely; there is no push credential — the user pushes from the host\n'
+    printf '  briefing        /tmp/agent-briefing.md describes this environment + its mounts;\n'
+    printf '                  start with:  claude "$(cat /tmp/agent-briefing.md)"\n'
     printf '\n'
 fi
