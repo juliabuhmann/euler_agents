@@ -1,0 +1,87 @@
+# Interactive rcfile for the in-container shell (euler-agent-run --interactive).
+#
+# Not sourced from the host: bin/euler-agent-run binds the repo read-only at
+# /repo, so this file is already inside the container at /repo/bin/claude-shellrc
+# and is passed to bash via --rcfile.
+#
+# Purpose: make the bare `claude` / `codex` commands behave the same way they do
+# on the non-interactive path in bin/inner.sh, which runs them with their
+# permission prompts bypassed. The container boundary is what contains the agent:
+# euler-agent-run uses --cleanenv --containall with explicit binds, so a bypassed
+# agent can still only reach /workspace, /home, /tmp and whatever was passed via
+# --extra-bind. /repo itself is bound read-only, so the agent cannot edit the
+# scripts that constrain it.
+#
+# The agents' own in-process sandboxes are not used because they do not work
+# under apptainer's user namespace; the flags below turn them off deliberately.
+
+# Apptainer injects PROMPT_COMMAND='PS1="Apptainer> "; unset PROMPT_COMMAND' into
+# the container environment, which runs before the first prompt and would
+# overwrite PS1 set here. Drop it so the prompt shows we are in this wrapper.
+unset PROMPT_COMMAND
+export PS1='(euler-agents) \w \$ '
+export HOME=/home
+
+# Claude Code. Management subcommands are passed through untouched — the bypass
+# flag changes their argument parsing, so `claude --version` and `claude mcp list`
+# must not receive it.
+claude() {
+    case "${1:-}" in
+        config|mcp|update|doctor|install|migrate-installer|auth|setup-token|remote-control|--help|-h|--version|-v)
+            command claude "$@"
+            ;;
+        *)
+            command claude --dangerously-skip-permissions "$@"
+            ;;
+    esac
+}
+
+# Start a Remote Control session, steerable from claude.ai/code or the mobile app.
+# Kept as its own command rather than folded into claude() above: the
+# remote-control subcommand rejects --dangerously-skip-permissions and takes
+# --permission-mode instead. It also needs the full-scope OAuth login in a
+# persistent home, which only `euler-agent-run --remote-control` sets up.
+claude-rc() {
+    if [[ "${REMOTE_CONTROL:-}" != "true" ]]; then
+        echo "claude-rc: this container was not started for Remote Control." >&2
+        echo "  Relaunch with: euler-agent-run --remote-control --interactive --project NAME" >&2
+        echo "  (that swaps in the persistent home holding the claude.ai OAuth login)" >&2
+        return 1
+    fi
+    # Supply defaults only for flags the caller did not pass, so
+    # `claude-rc --name foo` does not end up with --name twice.
+    local args=("$@")
+    [[ " $* " == *" --permission-mode "* ]] || args=(--permission-mode bypassPermissions "${args[@]+"${args[@]}"}")
+    [[ " $* " == *" --name "*            ]] || args=(--name "${RC_SESSION_NAME:-euler-rc}" "${args[@]+"${args[@]}"}")
+    echo "Starting Remote Control in $PWD"
+    echo "Pick it up at https://claude.ai/code or in the Claude mobile app."
+    command claude remote-control "${args[@]}"
+}
+
+# Codex. Flags mirror the non-interactive invocation in bin/inner.sh.
+codex() {
+    case "${1:-}" in
+        login|logout|mcp|completion|app-server|--help|-h|--version|-V)
+            command codex "$@"
+            ;;
+        *)
+            command codex --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "$@"
+            ;;
+    esac
+}
+
+# Banner once per container session, not for nested interactive shells.
+if [[ -z "${EULER_AGENTS_RC_LOADED:-}" ]]; then
+    export EULER_AGENTS_RC_LOADED=1
+    printf '\n'
+    printf 'euler-agents container shell\n'
+    printf '  claude / codex  are wrapped to skip permission prompts (see /repo/bin/claude-shellrc)\n'
+    printf '  command claude  runs the CLI unwrapped, with prompts enabled\n'
+    if [[ "${REMOTE_CONTROL:-}" == "true" ]]; then
+        printf '  claude-rc       start a Remote Control session (steer from claude.ai/code or mobile)\n'
+        printf '  /workspace      persistent, and so is /home — transcripts survive this job\n'
+    else
+        printf '  /workspace      persistent; /home and /tmp are discarded when this job ends\n'
+    fi
+    printf '\n'
+fi

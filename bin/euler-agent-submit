@@ -55,8 +55,13 @@ OPTIONS
 
 Without --task / --task-file, reads the task from config/task.json.
 Additional flags (--project, --max-budget-usd, --effort, --auth, --ref,
---remote-control) are forwarded to euler-agent-run; see: euler-agent-run --help
-  --auth apikey|subscription   Claude auth: API key (default) or subscription (CLAUDE_CODE_OAUTH_TOKEN).
+--extra-bind, --extra-read-bind, --remote-control) are forwarded to
+euler-agent-run; see: euler-agent-run --help
+  --extra-bind SPEC            Bind an extra host path read-write into the container (repeatable).
+  --extra-read-bind SPEC       Bind an extra host path read-only into the container (repeatable).
+  --auth login|subscription|apikey
+                               Claude auth (default: login — the stored claude.ai login from
+                               'euler-agent-run --claude-login'). See euler-agent-run --help.
   --remote-control             Start a steerable Claude session driven from claude.ai/mobile app.
                                Claude-only; requires --project. First run 'euler-agent-run --claude-login'.
 
@@ -147,10 +152,25 @@ print(v.get('gpu_mem', ''))
     fi
 }
 
+# Make the SRC part of a bind spec absolute before forwarding it. The submitted
+# job does not necessarily start in the directory sbatch was called from, so a
+# relative SRC would resolve differently inside the job (same reason --task-file
+# is realpath'd below). DEST and mode are passed through untouched.
+_abs_bind_spec() {
+    local spec="$1" src rest
+    src="${spec%%:*}"
+    rest="${spec#"$src"}"
+    printf '%s%s' "$(realpath -m -- "$src")" "$rest"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --interactive) INTERACTIVE=true; shift ;;
+        --extra-bind|--extra-read-bind)
+            PASSTHROUGH+=("$1" "$(_abs_bind_spec "$2")"); shift 2 ;;
+        --ref)
+            PASSTHROUGH+=("$1" "$(realpath -m -- "$2")"); shift 2 ;;
         --preset) _apply_preset "$2"; shift 2 ;;
         --gpu) GPU=true; PASSTHROUGH+=("$1"); shift ;;
         --gpu-type) GPU_TYPE="$2"; PASSTHROUGH+=("$1" "$2"); shift 2 ;;

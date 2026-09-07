@@ -14,7 +14,7 @@
     "model": "claude-opus-4-8",
     "effort": null,
     "max_budget_usd": 10,
-    "auth": "apikey"
+    "auth": "login"
   },
   "notifications": {
     "email": {

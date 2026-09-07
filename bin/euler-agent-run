@@ -28,13 +28,23 @@ OPTIONS
   --max-budget-usd N          Hard USD spending cap (Claude only)
   --effort low|medium|high|xhigh|max
                               Thinking depth (Claude only)
-  --auth   apikey|subscription
-                              Claude auth source (default: apikey). 'apikey' uses
-                              ANTHROPIC_API_KEY (pay-per-use, accurate cost reporting).
-                              'subscription' injects CLAUDE_CODE_OAUTH_TOKEN, a long-lived
-                              token from 'claude setup-token' (notional cost, plan rate limits
-                              apply). Ignored for Codex.
+  --auth   login|subscription|apikey
+                              Claude auth source (default: login). Ignored for Codex.
+                              'login'        uses the claude.ai login stored in home-claude/ by
+                                             --claude-login. Nothing is injected; the stored
+                                             credential refreshes itself. Same credential
+                                             Remote Control needs, so one login covers everything.
+                              'subscription' injects CLAUDE_CODE_OAUTH_TOKEN, a long-lived token
+                                             from 'claude setup-token' (notional cost, plan rate
+                                             limits apply). Does not work with --remote-control.
+                              'apikey'       injects ANTHROPIC_API_KEY (pay-per-use, accurate cost
+                                             reporting). Does not work with --remote-control.
   --ref DIR                   Bind a reference directory to /reference inside the container
+  --extra-bind SPEC           Bind an extra host path READ-WRITE into the container. Repeatable.
+                              SPEC is SRC[:DEST][:ro|rw]; DEST defaults to SRC and must be
+                              absolute (that is what distinguishes SRC:DEST from SRC:MODE).
+  --extra-read-bind SPEC      Same, but READ-ONLY. Repeatable. Passing an explicit ':rw' here
+                              is an error rather than a silent downgrade.
   --github-auth               Inject GitHub credentials into the container so the agent can
                               clone private repos, commit, push, and open PRs. Requires
                               GITHUB_TOKEN, GIT_USER_NAME, GIT_USER_EMAIL in
@@ -48,6 +58,8 @@ OPTIONS
                               --project (transcripts persist in the project home). Model is chosen
                               per-session in the app; --model/--effort/--max-budget-usd/--auth
                               do not apply (it runs on the stored OAuth login).
+                              Combine with --interactive to get a container shell instead of
+                              starting the session immediately, then run 'claude-rc' yourself.
   -h, --help                  Show this help
 
 Task resolution order (highest priority first):
@@ -111,6 +123,8 @@ AGENT_EFFORT=""
 AUTH_MODE=""
 PROJECT=""
 REF_DIR=""
+EXTRA_BINDS=()
+EXTRA_READ_BINDS=()
 INTERACTIVE=false
 GPU=false
 GITHUB_AUTH=false
@@ -131,6 +145,8 @@ while [[ $# -gt 0 ]]; do
         --auth)              AUTH_MODE="$2";           shift 2 ;;
         --project)           PROJECT="$2";             shift 2 ;;
         --ref)               REF_DIR="$2";             shift 2 ;;
+        --extra-bind)        EXTRA_BINDS+=("$2");      shift 2 ;;
+        --extra-read-bind)   EXTRA_READ_BINDS+=("$2"); shift 2 ;;
         --github-auth)       GITHUB_AUTH=true;         shift ;;
         --remote-control)    REMOTE_CONTROL=true;      shift ;;
         --claude-login)      CLAUDE_LOGIN=true;        shift ;;
@@ -206,7 +222,7 @@ fi
 [[ -z "$MAX_BUDGET_USD" ]] && MAX_BUDGET_USD=$(_agent_setting max_budget_usd)
 [[ -z "$AGENT_EFFORT"   ]] && AGENT_EFFORT=$(_agent_setting effort)
 [[ -z "$AUTH_MODE"      ]] && AUTH_MODE=$(_agent_setting auth)
-[[ -z "$AUTH_MODE"      ]] && AUTH_MODE="apikey"
+[[ -z "$AUTH_MODE"      ]] && AUTH_MODE="login"
 
 # Remote Control mode: a long-running, steerable Claude session (claude.ai/mobile app).
 # Distinct from the headless one-shot path — requires a persistent, project-scoped home
@@ -292,6 +308,18 @@ if [[ "$REMOTE_CONTROL" == true ]]; then
         echo "         then delete $JOB_HOME so it re-seeds from the fresh login." >&2
     fi
     echo "Auth:      Claude subscription (full-scope OAuth from persistent home)"
+elif [[ "$AGENT" == claude && "$AUTH_MODE" == login ]]; then
+    # Use the claude.ai login stored in home-claude/ by --claude-login. It is copied into
+    # this run's home like the rest of that directory, and it carries a refresh token, so
+    # it renews itself. Inject no credential: an env token would take precedence over the
+    # stored login and defeat the point.
+    if [[ ! -f "$JOB_HOME/.claude/.credentials.json" ]]; then
+        echo "ERROR: --auth login needs a stored claude.ai login, and none was found in" >&2
+        echo "       $SOURCE_HOME/.claude/.credentials.json" >&2
+        echo "       Run 'bin/euler-agent-run --claude-login' on a login node first." >&2
+        exit 1
+    fi
+    echo "Auth:      Claude subscription (stored claude.ai login)"
 elif [[ "$AGENT" == claude && "$AUTH_MODE" == subscription ]]; then
     if [[ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]]; then
         echo "ERROR: --auth subscription requires CLAUDE_CODE_OAUTH_TOKEN in config/secrets.local.env." >&2
@@ -333,6 +361,89 @@ SING_BINDS=(
 )
 [[ -n "$REF_DIR" ]] && SING_BINDS+=(--bind "$REF_DIR:/reference:ro")
 
+# Turn an --extra-bind / --extra-read-bind SPEC into a singularity --bind value.
+#   SPEC = SRC[:DEST][:ro|rw],  $2 = default mode when SPEC omits one
+# DEST is required to be absolute, which is what disambiguates SRC:DEST from
+# SRC:MODE without guessing. Prints the resolved spec; returns non-zero on a bad
+# spec (the caller must check — an `exit` here would only leave the subshell).
+_resolve_bind() {
+    local spec="$1" want_mode="$2"
+    local -a f=()
+    IFS=':' read -r -a f <<< "$spec"
+    local src="${f[0]}" dest="" mode=""
+
+    case "${#f[@]}" in
+        1) ;;
+        2) if [[ "${f[1]}" == ro || "${f[1]}" == rw ]]; then mode="${f[1]}"; else dest="${f[1]}"; fi ;;
+        3) dest="${f[1]}"; mode="${f[2]}" ;;
+        *) echo "ERROR: cannot parse bind spec '$spec' (expected SRC[:DEST][:ro|rw])" >&2; return 1 ;;
+    esac
+
+    if [[ ! -e "$src" ]]; then
+        echo "ERROR: bind source does not exist: $src" >&2
+        return 1
+    fi
+    src=$(realpath -- "$src")
+
+    if [[ -z "$dest" ]]; then
+        dest="$src"
+    elif [[ "$dest" != /* ]]; then
+        echo "ERROR: bind destination must be absolute, got '$dest' in '$spec'" >&2
+        return 1
+    fi
+
+    [[ -z "$mode" ]] && mode="$want_mode"
+    if [[ "$mode" != ro && "$mode" != rw ]]; then
+        echo "ERROR: bind mode must be 'ro' or 'rw', got '$mode' in '$spec'" >&2
+        return 1
+    fi
+    # Refuse to silently downgrade: an explicit :rw on the read-only flag is a
+    # contradiction, so say so instead of quietly mounting it read-only.
+    if [[ "$want_mode" == ro && "$mode" == rw ]]; then
+        echo "ERROR: '$spec' asks for rw but was passed to --extra-read-bind." >&2
+        echo "       Use --extra-bind for read-write access." >&2
+        return 1
+    fi
+
+    printf '%s:%s:%s' "$src" "$dest" "$mode"
+}
+
+# Container-side destinations of every extra bind, collected so Remote Control can
+# pre-accept workspace trust for each of them (see below).
+BIND_DESTS=(/workspace)
+
+for _spec in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do
+    _resolved=$(_resolve_bind "$_spec" rw) || exit 1
+    SING_BINDS+=(--bind "$_resolved")
+    BIND_DESTS+=("$(cut -d: -f2 <<< "$_resolved")")
+    echo "Extra bind: $_resolved"
+done
+for _spec in ${EXTRA_READ_BINDS[@]+"${EXTRA_READ_BINDS[@]}"}; do
+    _resolved=$(_resolve_bind "$_spec" ro) || exit 1
+    SING_BINDS+=(--bind "$_resolved")
+    BIND_DESTS+=("$(cut -d: -f2 <<< "$_resolved")")
+    echo "Extra bind: $_resolved"
+done
+
+# Remote Control prompts for per-directory workspace trust and has no
+# --dangerously-skip-permissions escape hatch; trust is keyed by path in
+# ~/.claude.json. bin/inner.sh pre-accepts it for the headless path from inside the
+# container, but the interactive path never runs inner.sh — so pre-accept here, on
+# the host, where $JOB_HOME is just a directory. Covers /workspace and every extra
+# bind destination, since any of those may be the cwd when the session starts.
+if [[ "$REMOTE_CONTROL" == true ]]; then
+    python3 - "$JOB_HOME/.claude.json" "${BIND_DESTS[@]}" <<'PY'
+import json, os, sys
+path, dests = sys.argv[1], sys.argv[2:]
+d = json.load(open(path)) if os.path.exists(path) else {}
+projects = d.setdefault("projects", {})
+for dest in dests:
+    projects.setdefault(dest, {})["hasTrustDialogAccepted"] = True
+json.dump(d, open(path, "w"))
+PY
+    echo "Trust:     pre-accepted for ${BIND_DESTS[*]}"
+fi
+
 NV_FLAG=()
 [[ "$GPU" == true ]] && NV_FLAG=(--nv)
 
@@ -340,12 +451,18 @@ if [[ "$INTERACTIVE" == true ]]; then
     echo "Opening interactive shell inside container..."
     echo "  Workspace: /workspace  (persists at $RUN_WORKSPACE)"
     [[ "$GPU" == true ]] && echo "  GPU mode enabled (--nv)"
-    singularity shell \
+    # `singularity exec bash --rcfile` rather than `singularity shell`, which has
+    # no way to load an rcfile: bin/claude-shellrc is what makes the bare `claude`
+    # and `codex` commands skip permission prompts, matching bin/inner.sh.
+    # --pwd starts the shell in /workspace.
+    singularity exec \
         --cleanenv --containall \
+        --pwd /workspace \
         "${NV_FLAG[@]+"${NV_FLAG[@]}"}" \
         "${SING_ENV[@]}" \
         "${SING_BINDS[@]}" \
-        "$IMAGE_PATH"
+        "$IMAGE_PATH" \
+        bash --rcfile /repo/bin/claude-shellrc -i
 else
     AGENT_EXIT=0
     singularity exec \
