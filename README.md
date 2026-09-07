@@ -447,6 +447,24 @@ directory. With `--project NAME`, every run for that project shares
 > Do not run two jobs with the same `--project` in parallel — agents writing to the same
 > workspace will conflict. Run them sequentially.
 
+### Sessions and `--resume`
+
+Claude Code keeps transcripts per working directory under `~/.claude/projects/`. Inside the
+container `~` is the agent's own home, so on its own `claude --resume` would show none of your
+host sessions, and a throwaway home would lose the container's sessions at job end. The launcher
+therefore mounts your host session directory for the workspace and for every **read-write**
+bind into the agent home, at the same encoded path. Effects:
+
+- `cd` into a bound repo inside the container and `claude --resume` lists the sessions you
+  started there on the host, and vice versa.
+- Sessions started inside persist in your host `~/.claude/projects/` (they count against your
+  home quota, exactly as host sessions do).
+- Only those directories' transcripts are visible to the agent; read-only binds and the rest of
+  your `~/.claude` are not.
+
+Resuming across Claude Code versions (the image's vs. your host's) usually works but is not
+guaranteed; rebuild the image if it misbehaves.
+
 ### Model, effort and budget
 
 | Flag | Controls | Default |

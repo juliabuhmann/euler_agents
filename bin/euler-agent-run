@@ -515,12 +515,16 @@ _resolve_bind() {
 # Container-side destinations of every extra bind, collected so Remote Control can
 # pre-accept workspace trust for each of them (see below).
 BIND_DESTS=("$RUN_WORKSPACE")
+# Read-write destinations: places the agent may start a session in, whose host
+# session directories get shared into the agent home (see below).
+SESSION_DESTS=("$RUN_WORKSPACE")
 
 for _spec in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do
     _resolved=$(_resolve_bind "$_spec" rw) || exit 1
     SING_BINDS+=(--bind "$_resolved")
     BIND_DESTS+=("$(cut -d: -f2 <<< "$_resolved")")
     MOUNTED_DESTS+=("$(cut -d: -f2 <<< "$_resolved")")
+    SESSION_DESTS+=("$(cut -d: -f2 <<< "$_resolved")")
     echo "Extra bind: $_resolved"
 done
 for _spec in ${EXTRA_READ_BINDS[@]+"${EXTRA_READ_BINDS[@]}"}; do
@@ -562,6 +566,7 @@ for _file in ${BIND_FILES[@]+"${BIND_FILES[@]}"}; do
         SING_BINDS+=(--bind "$_resolved")
         BIND_DESTS+=("$_dest")
         MOUNTED_DESTS+=("$_dest")
+        [[ "$(cut -d: -f3 <<< "$_resolved")" == rw ]] && SESSION_DESTS+=("$_dest")
         echo "Binds file: $_resolved"
     done < "$_file"
 done
@@ -584,6 +589,24 @@ done
     printf '| `/home` | rw, private agent home (`~`), not the user'"'"'s home |\n'
     printf '| `/tmp` | rw, node-local scratch, gone after the job |\n'
 } > "$JOB_TMPDIR/scratch/agent-briefing.md"
+
+# Share Claude sessions with the host, per directory. Claude keeps transcripts (and
+# auto-memory) under ~/.claude/projects/<cwd with every char outside [A-Za-z0-9-]
+# turned into '-'>. Inside, ~ is the agent home, so `claude --resume` there would see
+# none of the host's sessions and the throwaway home would lose its own. Paths are
+# identical on both sides, so the encoded name is too: mount the host's directory for
+# the workspace and every read-write bind into the agent home at the same place.
+# Only those directories are exposed, not the rest of the host's ~/.claude.
+_encode_project_dir() { python3 -c 'import re, sys; print(re.sub(r"[^A-Za-z0-9-]", "-", sys.argv[1]))' "$1"; }
+_host_projects="$HOME/.claude/projects"
+_shared_sessions=()
+for _dest in "${SESSION_DESTS[@]}"; do
+    _enc=$(_encode_project_dir "$_dest")
+    mkdir -p "$_host_projects/$_enc" "$JOB_HOME/.claude/projects/$_enc"
+    SING_BINDS+=(--bind "$_host_projects/$_enc:/home/.claude/projects/$_enc")
+    _shared_sessions+=("$_dest")
+done
+echo "Sessions:  shared with the host for ${_shared_sessions[*]}"
 
 # Claude prompts for per-directory workspace trust the first time it starts in a
 # directory (Remote Control has no bypass flag for it at all); trust is keyed by path
