@@ -182,6 +182,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Catch the two easy slips before they select the wrong agent silently: an unknown
+# --agent, and an agent name given to --model (e.g. "--model claude" meaning "--agent claude").
+case "$AGENT" in
+    codex|claude) ;;
+    *) echo "ERROR: --agent must be 'codex' or 'claude', got '$AGENT'" >&2; exit 1 ;;
+esac
+case "$MODEL" in
+    codex|claude)
+        echo "ERROR: --model '$MODEL' is an agent name, not a model. Did you mean --agent $MODEL?" >&2
+        exit 1 ;;
+esac
+
 # One-time interactive OAuth login for Claude Remote Control.
 # Remote Control requires a full-scope claude.ai login token (API keys and the
 # inference-only `claude setup-token` are both rejected). We run `claude auth login`
@@ -426,9 +438,11 @@ elif [[ "$AGENT" == claude && -z "$ANTHROPIC_API_KEY" ]]; then
     echo "ERROR: --auth apikey requires ANTHROPIC_API_KEY in config/secrets.local.env." >&2
     echo "       Use --auth subscription to run on your Claude subscription instead." >&2
     exit 1
-else
-    [[ -n "$ANTHROPIC_API_KEY" ]] && SING_ENV+=(--env "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
-    [[ "$AGENT" == claude ]] && echo "Auth:      Anthropic API key"
+elif [[ "$AGENT" == claude ]]; then
+    # --auth apikey. Only here does the Anthropic key enter the container; a Codex run
+    # never receives it (a Claude started by hand inside would otherwise pick it up).
+    SING_ENV+=(--env "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+    echo "Auth:      Anthropic API key"
 fi
 [[ -n "${SLURM_JOB_ID:-}" ]] && SING_ENV+=(--env "SLURM_JOB_ID=$SLURM_JOB_ID")
 if [[ "$REMOTE_CONTROL" == true ]]; then
