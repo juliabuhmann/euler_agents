@@ -444,6 +444,11 @@ directory. With `--project NAME`, every run for that project shares
 `<workspace_dir>/NAME` — useful for multi-step work where later runs build on earlier results.
 `--remote-control` requires it.
 
+Names may be nested to group related workspaces: `--project shi/omicsMSA` uses
+`<workspace_dir>/shi/omicsMSA`, creating the parent as needed. Each segment is limited to
+letters, digits, `.`, `_` and `-`; the Remote Control session is then named
+`euler-rc-shi-omicsMSA-<jobid>`.
+
 > Do not run two jobs with the same `--project` in parallel — agents writing to the same
 > workspace will conflict. Run them sequentially.
 

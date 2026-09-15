@@ -25,6 +25,8 @@ OPTIONS
                               the container holds no git credentials)
   --model  MODEL              Model override (e.g. claude-sonnet-4-6, gpt-5.4)
   --project NAME              Named workspace; persists and is reused across jobs.
+                              May be nested to group related work: "shi/omicsMSA" lives at
+                              <workspace_dir>/shi/omicsMSA. Segments: [A-Za-z0-9._-].
                               Without --project, a fresh timestamped dir is created.
   --max-budget-usd N          Hard USD spending cap (Claude only)
   --effort low|medium|high|xhigh|max
@@ -262,9 +264,19 @@ OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 
-# Resolve workspace: named project (persistent, reused) or timestamped (one-off)
+# Resolve workspace: named project (persistent, reused) or timestamped (one-off).
+# A project may be nested, e.g. "shi/omicsMSA" -> <workspace_dir>/shi/omicsMSA, to
+# group related workspaces under a parent. Segments are restricted to safe characters
+# so the name can never escape workspace_dir or break the Remote Control session name.
 if [[ -n "$PROJECT" ]]; then
+    PROJECT="${PROJECT%/}"   # tolerate a trailing slash from tab completion
+    if [[ ! "$PROJECT" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ || "/$PROJECT/" == *"/../"* || "/$PROJECT/" == *"/./"* ]]; then
+        echo "ERROR: --project must be one or more path segments of [A-Za-z0-9._-], joined by '/', e.g. shi/omicsMSA (got '$PROJECT')" >&2
+        exit 1
+    fi
     RUN_WORKSPACE="$WORKSPACE_DIR/$PROJECT"
+    # Slashes are fine in a path but not in a session name.
+    PROJECT_SLUG="${PROJECT//\//-}"
 else
     RUN_WORKSPACE="$WORKSPACE_DIR/${AGENT}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-interactive}"
 fi
@@ -422,7 +434,7 @@ fi
 if [[ "$REMOTE_CONTROL" == true ]]; then
     SING_ENV+=(
         --env "REMOTE_CONTROL=true"
-        --env "RC_SESSION_NAME=euler-rc-${PROJECT}-${SLURM_JOB_ID:-interactive}"
+        --env "RC_SESSION_NAME=euler-rc-${PROJECT_SLUG}-${SLURM_JOB_ID:-interactive}"
     )
 fi
 
