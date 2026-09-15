@@ -48,7 +48,6 @@ claude-rc() {
     if [[ "${REMOTE_CONTROL:-}" != "true" ]]; then
         echo "claude-rc: this container was not started for Remote Control." >&2
         echo "  Relaunch with: euler-agent-run --remote-control --interactive --project NAME" >&2
-        echo "  (that swaps in the persistent home holding the claude.ai OAuth login)" >&2
         return 1
     fi
     # Supply defaults only for flags the caller did not pass, so
@@ -82,12 +81,9 @@ if [[ -z "${EULER_AGENTS_RC_LOADED:-}" ]]; then
     printf '  command claude  runs the CLI unwrapped, with prompts enabled\n'
     printf '  paths           every bound directory is at its host path; only ~ (/home) differs\n'
     printf '  workspace       %s (persistent)\n' "$AGENT_WORKSPACE"
-    if [[ "${REMOTE_CONTROL:-}" == "true" ]]; then
+    [[ "${REMOTE_CONTROL:-}" == "true" ]] && \
         printf '  claude-rc       start a Remote Control session (steer from claude.ai/code or mobile)\n'
-        printf '  /home           persistent too — transcripts survive this job\n'
-    else
-        printf '  /home, /tmp     discarded when this job ends\n'
-    fi
+    printf '  /home           the persistent agent home, shared by all containers; /tmp is discarded\n'
     printf '  git             commit freely; there is no push credential — the user pushes from the host\n'
     printf '  briefing        /tmp/agent-briefing.md describes this environment + its mounts;\n'
     printf '                  start with:  claude "$(cat /tmp/agent-briefing.md)"\n'

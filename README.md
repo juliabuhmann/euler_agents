@@ -110,8 +110,8 @@ bin/euler-agent-run --claude-login
 
 Pick your **claude.ai account**, not an API key. This runs `claude auth login` inside the
 container with `home-claude/` mounted writable, so the credential is stored in
-`home-claude/.claude/.credentials.json` and copied into every run afterwards. It carries a refresh
-token, so it renews itself rather than expiring after a few hours.
+`home-claude/.claude/.credentials.json`. Every run mounts that same directory as the agent's home,
+so the credential refreshes itself in place and stays valid as long as you keep using it.
 
 This is the default (`--auth login`). Two alternatives exist if you need them: a long-lived
 `claude setup-token`, or pay-per-use with an API key — both in
@@ -216,9 +216,7 @@ and `tmux attach -t agent`. Find the session by name (`euler-rc-<project>-<jobid
 `claude-rc` is a helper from `bin/claude-shellrc`; it runs `claude remote-control` with a session
 name and `--permission-mode bypassPermissions`. What `--remote-control` changes:
 
-- `--project` becomes **required**, and `/home` becomes persistent
-  (`<workspace>/<project>/.claude-home`) so the login and the conversation transcripts survive
-  the job ending.
+- `--project` becomes **required**; it names the session (`euler-rc-<project>-<jobid>`).
 - Workspace trust is pre-accepted for the workspace and every bind, because
   `claude remote-control` prompts for it and has no bypass flag.
 - It accepts **only** the stored claude.ai login from Setup step 4 — a `setup-token` or API key
@@ -229,9 +227,9 @@ The session dies when the SLURM job ends, so size the allocation in step 1 accor
 
 **If the login was revoked or you switched accounts**, `claude-rc` fails with a 401. Re-run
 `bin/euler-agent-run --claude-login` (delete `home-claude/.claude/.credentials.json` first if it
-refuses because a login already exists). The next launch of every project copies the newer
-login into that project's `.claude-home`, keeping its transcripts and MCP authorizations; a
-running container needs `claude auth login` inside instead.
+refuses because a login already exists). All containers share that one home, so the new login is
+live for every project at once; a container that is already running needs `claude auth login`
+inside instead.
 
 ### Mounting extra directories
 
@@ -276,7 +274,7 @@ What the agent can reach, and nothing else:
 | host conda envs | **ro** | from `conda_envs_dir` in settings; usable, not modifiable |
 | host conda pkgs, pixi home, cache dir | rw | from settings; shared caches so nothing lands under the quota-limited home |
 | this repo | **ro** | the launcher scripts — the agent cannot edit what constrains it |
-| `/home` | rw | agent state; persistent per project, or a throwaway copy in the terminal-only variant. **Not** your home |
+| `/home` | rw | the agent home `home-claude/`: login, settings, transcripts. One persistent directory shared by every container. **Not** your home |
 | `/tmp` | rw | node-local scratch, discarded when the job ends |
 
 The host `$HOME` is never mounted and only `/etc/localtime` and `/etc/hosts` are system binds, so
@@ -299,9 +297,9 @@ cd /path/to/writable/dir
 claude
 ```
 
-The tradeoffs: `/home` is a throwaway copy, so conversation transcripts are discarded when you
-exit, and you cannot pick the session up from elsewhere. In exchange `--project` is optional and
-the model and effort flags apply as normal.
+The tradeoff: you cannot pick the session up from elsewhere. In exchange `--project` is optional
+and the model and effort flags apply as normal. Transcripts persist either way (see
+[Sessions and `--resume`](#sessions-and---resume)).
 
 ### Other ways to run a steerable session
 
@@ -452,12 +450,32 @@ letters, digits, `.`, `_` and `-`; the Remote Control session is then named
 > Do not run two jobs with the same `--project` in parallel — agents writing to the same
 > workspace will conflict. Run them sequentially.
 
+### The agent home: one directory, shared by every container
+
+`/home` inside the container is `home-claude/` (or `home-codex/`), the same directory for every
+launch in every mode. It holds the claude.ai login, the pre-accepted trust and onboarding flags,
+and Claude's own state. It is deliberately **not** a per-job copy: claude.ai refresh tokens
+rotate, so a copied credential dies the moment any other copy refreshes, and containers that
+copied the login would keep logging each other out. One file refreshed in place is what your
+laptop does with several Claude windows open, and Claude Code is built for that.
+
+The directory lives in this repo by default. To keep it off your home quota, set
+`agent_home_dir` in `config/settings.local.json` to a directory on project storage and move
+`home-claude/` (and `home-codex/`) there once:
+
+```bash
+mkdir -p /cluster/project/<group>/<user>/agentic_ai/agent-homes
+mv home-claude home-codex /cluster/project/<group>/<user>/agentic_ai/agent-homes/
+```
+
+Leftover `<workspace>/<project>/.claude-home` directories from the earlier per-project design
+are unused now and can be deleted.
+
 ### Sessions and `--resume`
 
 Claude Code keeps transcripts per working directory under `~/.claude/projects/`. Inside the
 container `~` is the agent's own home, so on its own `claude --resume` would show none of your
-host sessions, and a throwaway home would lose the container's sessions at job end. The launcher
-therefore mounts your host session directory for the workspace and for every **read-write**
+host sessions. The launcher therefore mounts your host session directory for the workspace and for every **read-write**
 bind into the agent home, at the same encoded path. Effects:
 
 - `cd` into a bound repo inside the container and `claude --resume` lists the sessions you
@@ -501,8 +519,8 @@ land in the project workspace, at a path that exists on the host, so an env buil
 activates on the host (and vice versa). Because every path is identical, shebangs and prefixes
 baked into an env are correct on both sides.
 
-Nothing accumulates under `~`: the host home is never mounted, `~` inside is the per-job agent
-home, and the caches above go to project storage. Set the four values in
+Nothing accumulates under `~`: the host home is never mounted, `~` inside is the agent home
+(`home-claude/`, or wherever `agent_home_dir` points), and the caches above go to project storage. Set the four values in
 `config/settings.local.json` to match your host setup (they mirror `~/.condarc` and `$PIXI_HOME`).
 
 ```bash
@@ -569,7 +587,7 @@ The agent runs inside a Singularity container with `--cleanenv --containall`:
 | Harness repo | Mounted read-only at its own path — the agent cannot modify the scripts that launched it |
 | Read-only mounts | `--extra-read-bind`, `--ref` and the host conda envs are enforced by the kernel, not by the agent's cooperation |
 | Git | No token in the container; the agent can only commit locally |
-| Parallel jobs | Each job gets a private tmpdir; jobs don't interfere with each other |
+| Parallel jobs | Each launch gets a private `/tmp`; all launches share the one agent home, as several Claude windows on a laptop do |
 | Privilege | Runs as your own UID — no root, no escalation possible |
 
 What it does **not** protect against:
@@ -592,7 +610,7 @@ a compute node.
 
 | File | Tracked | Holds |
 |---|---|---|
-| `config/settings.json` | yes | committed defaults: image path, workspace dirs, host tool dirs (`conda_envs_dir`, `conda_pkgs_dir`, `pixi_home`, `cache_dir`), git identity, SLURM sizes, per-agent model/budget/auth |
+| `config/settings.json` | yes | committed defaults: image path, workspace dirs, host tool dirs (`conda_envs_dir`, `conda_pkgs_dir`, `pixi_home`, `cache_dir`), `agent_home_dir` (where `home-claude/` lives; null = this repo), git identity, SLURM sizes, per-agent model/budget/auth |
 | `config/settings.local.json` | no | your overrides; merged over `settings.json` **shallowly** (a top-level key replaces the whole block) |
 | `config/secrets.env` | no | template for credentials |
 | `config/secrets.local.env` | no | real credentials: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` (only needed for `--auth subscription|apikey`) |

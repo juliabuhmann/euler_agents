@@ -60,7 +60,7 @@ OPTIONS
                               directly on a login node (needs a TTY + internet); no SLURM.
   --remote-control            Start a steerable Claude session (drive it from claude.ai/code or the
                               mobile app) instead of running a task headless. Claude-only; requires
-                              --project (transcripts persist in the project home). Model is chosen
+                              --project (names the session). Model is chosen
                               per-session in the app; --model/--effort/--max-budget-usd/--auth
                               do not apply (it runs on the stored OAuth login).
                               Combine with --interactive to get a container shell instead of
@@ -89,8 +89,9 @@ EXAMPLES
 PATHS INSIDE THE CONTAINER
   Every bound directory appears at its host path: the workspace, this repo (read-only), --ref,
   --extra-bind, and the host conda/pixi/cache dirs from settings. Only the agent's home differs:
-  it is /home, a per-job copy of home-<agent>/ (persistent under <workspace>/.claude-home with
-  --remote-control). The host home is never mounted, so nothing the agent does lands under ~.
+  it is /home, the persistent home-<agent>/ directory shared by all containers (location set
+  by "agent_home_dir" in settings). The host home is never mounted, so nothing the agent does
+  lands under your ~.
 
 CONFIGURATION
   config/settings.json   Image path, workspace dir, host tool dirs, git identity, per-agent
@@ -130,6 +131,8 @@ HOST_CONDA_ENVS_DIR=$(_setting "s.get('conda_envs_dir') or ''")
 HOST_CONDA_PKGS_DIR=$(_setting "s.get('conda_pkgs_dir') or ''")
 HOST_PIXI_HOME=$(_setting "s.get('pixi_home') or ''")
 HOST_CACHE_DIR=$(_setting "s.get('cache_dir') or ''")
+# Where the persistent agent homes (home-claude/, home-codex/) live; null = this repo.
+AGENT_HOME_DIR=$(_setting "s.get('agent_home_dir') or ''")
 # Commit identity for the agent. An identity, not a credential: no push token exists in
 # the container; the user pushes from the host after the run.
 GIT_USER_NAME=$(_setting "s.get('git_user_name') or 'euler-agent'")
@@ -201,7 +204,7 @@ esac
 # later seed each project's persistent Remote Control home.
 # Run this directly on a login node (has internet); it needs a TTY for the browser flow.
 if [[ "$CLAUDE_LOGIN" == true ]]; then
-    SOURCE_HOME="$REPO_DIR/home-claude"
+    SOURCE_HOME="${AGENT_HOME_DIR:-$REPO_DIR}/home-claude"
     mkdir -p "$SOURCE_HOME"
     echo "Launching 'claude auth login' inside the container."
     echo "  Credentials persist in: $SOURCE_HOME  (gitignored)"
@@ -264,7 +267,7 @@ fi
 # so the conversation transcripts survive the job (stored under .claude-home).
 if [[ "$REMOTE_CONTROL" == true ]]; then
     [[ "$AGENT" == claude ]] || { echo "ERROR: --remote-control is claude-only." >&2; exit 1; }
-    [[ -n "$PROJECT"      ]] || { echo "ERROR: --remote-control requires --project (session transcript persists in the project home)." >&2; exit 1; }
+    [[ -n "$PROJECT"      ]] || { echo "ERROR: --remote-control requires --project (it names the Remote Control session)." >&2; exit 1; }
 fi
 
 # Load API credentials (secrets.env is the template; secrets.local.env holds real values)
@@ -294,76 +297,38 @@ else
 fi
 mkdir -p "$RUN_WORKSPACE"
 
-# Set up job-scoped tmpdir (becomes /tmp inside the container)
-JOB_TMPDIR="${TMPDIR:-/tmp}/euler-agents.${SLURM_JOB_ID:-$$}"
+# Set up a per-LAUNCH tmpdir (becomes /tmp inside the container). Keyed on the PID as
+# well as the job id: on a held node every euler-agent-run shares one SLURM_JOB_ID, and
+# a shared tmpdir made the second launch reuse the first launch's home copy — with its
+# stale login — instead of re-seeding from home-<agent>/.
+JOB_TMPDIR="${TMPDIR:-/tmp}/euler-agents.${SLURM_JOB_ID:-nojob}.$$"
 mkdir -p "$JOB_TMPDIR/scratch"
 
 # Write task to job-specific scratch (not workspace) to avoid races on parallel jobs
 printf '%s' "$TASK" > "$JOB_TMPDIR/scratch/.task"
 
-# Give each job its own home copy so parallel jobs don't race on agent cache/state.
-# Remote Control is the exception: it uses a persistent, project-scoped home so the
-# OAuth token refreshes and the conversation transcript survive across jobs.
-SOURCE_HOME="$REPO_DIR/home-${AGENT}"
-mkdir -p "$SOURCE_HOME"
-if [[ "$REMOTE_CONTROL" == true ]]; then
-    JOB_HOME="$RUN_WORKSPACE/.claude-home"
-    if [[ ! -d "$JOB_HOME" ]]; then
-        echo "Seeding persistent Claude home at $JOB_HOME from $SOURCE_HOME"
-        cp -r "$SOURCE_HOME" "$JOB_HOME"
-    else
-        echo "Reusing persistent Claude home at $JOB_HOME (session transcripts live here)"
-        # A newer login in home-claude/ (from --claude-login, e.g. after switching
-        # accounts) supersedes the one stored here, so one login covers every project.
-        # Only the claude.ai credential and account are replaced; MCP authorisations in
-        # the same file are kept. Skipped when this home's credential is newer — it
-        # refreshes itself during sessions and must not be rolled back.
-        _src_cred="$SOURCE_HOME/.claude/.credentials.json"
-        _dst_cred="$JOB_HOME/.claude/.credentials.json"
-        if [[ -f "$_src_cred" && ( ! -f "$_dst_cred" || "$_src_cred" -nt "$_dst_cred" ) ]]; then
-            python3 - "$SOURCE_HOME" "$JOB_HOME" <<'PY'
-import json, os, sys
-src, dst = sys.argv[1], sys.argv[2]
-def load(p):
-    return json.load(open(p)) if os.path.exists(p) else {}
-s_cred, d_cred = load(f"{src}/.claude/.credentials.json"), load(f"{dst}/.claude/.credentials.json")
-if "claudeAiOauth" in s_cred:
-    d_cred["claudeAiOauth"] = s_cred["claudeAiOauth"]
-    os.makedirs(f"{dst}/.claude", exist_ok=True)
-    with open(f"{dst}/.claude/.credentials.json", "w") as f:
-        json.dump(d_cred, f)
-    os.chmod(f"{dst}/.claude/.credentials.json", 0o600)
-s_cfg, d_cfg = load(f"{src}/.claude.json"), load(f"{dst}/.claude.json")
-if "oauthAccount" in s_cfg:
-    d_cfg["oauthAccount"] = s_cfg["oauthAccount"]
-    with open(f"{dst}/.claude.json", "w") as f:
-        json.dump(d_cfg, f)
-PY
-            echo "Login:     refreshed from $SOURCE_HOME (newer claude.ai login)"
-        fi
-    fi
-else
-    JOB_HOME="$JOB_TMPDIR/home-${AGENT}"
-    cp -r "$SOURCE_HOME" "$JOB_HOME"
+# One persistent agent home per agent, shared by every container in every mode. NOT a
+# per-job copy: claude.ai refresh tokens rotate — each refresh invalidates the previous
+# one — so a copied credential goes stale the moment any other copy refreshes, and any
+# copy-back scheme races (two containers, or a job killed before writing back, and the
+# stored login is dead: "Login expired · Please run /login"). One file refreshed in place
+# is what a laptop with several Claude windows does; Claude Code is built for concurrent
+# sessions in one home. Default location is home-<agent>/ in this repo; set
+# "agent_home_dir" in settings to keep it off the home quota, then move the dirs there.
+SOURCE_HOME="${AGENT_HOME_DIR:-$REPO_DIR}/home-${AGENT}"
+mkdir -p "$SOURCE_HOME/.claude"
+JOB_HOME="$SOURCE_HOME"
+
+# The agent inherits the user's global ~/.claude/CLAUDE.md. The host home is never bound,
+# so a symlink would dangle inside the container; keep a real copy instead, refreshed on
+# every launch so edits to the global file propagate.
+_global_claude_md="$HOME/.claude/CLAUDE.md"
+if [[ -f "$_global_claude_md" ]]; then
+    rm -f "$JOB_HOME/.claude/CLAUDE.md"
+    cp "$_global_claude_md" "$JOB_HOME/.claude/CLAUDE.md"
 fi
 
-# home-claude/.claude/CLAUDE.md is a symlink to the user's global ~/.claude/CLAUDE.md so the
-# agent inherits the same rules. The host home is never bound, so inside the container the
-# link would dangle and the rules would silently not load. Materialise it: copy the target
-# over the link on every launch — also into the persistent Remote Control home, so edits to
-# the global file propagate.
-_src_claude_md="$SOURCE_HOME/.claude/CLAUDE.md"
-if [[ -L "$_src_claude_md" ]]; then
-    _claude_md_target=$(readlink -f "$_src_claude_md")
-    if [[ -f "$_claude_md_target" ]]; then
-        mkdir -p "$JOB_HOME/.claude"
-        rm -f "$JOB_HOME/.claude/CLAUDE.md"
-        cp "$_claude_md_target" "$JOB_HOME/.claude/CLAUDE.md"
-    else
-        echo "WARNING: $_src_claude_md -> $_claude_md_target is missing; agent runs without a global CLAUDE.md" >&2
-    fi
-fi
-
+echo "Agent home: $JOB_HOME  (persistent, shared by all containers)"
 echo "Workspace: $RUN_WORKSPACE  (same path inside the container)"
 echo "Agent:     $AGENT"
 echo "Image:     $IMAGE_PATH"
@@ -410,10 +375,9 @@ if [[ "$REMOTE_CONTROL" == true ]]; then
     # ANTHROPIC_API_KEY or inference-only token would be rejected by Remote Control.
     if [[ ! -f "$JOB_HOME/.claude/.credentials.json" ]]; then
         echo "WARNING: no OAuth credentials found in $JOB_HOME/.claude/.credentials.json." >&2
-        echo "         Remote Control will fail to start. Run 'euler-agent-run --claude-login' first," >&2
-        echo "         then delete $JOB_HOME so it re-seeds from the fresh login." >&2
+        echo "         Remote Control will fail to start. Run 'euler-agent-run --claude-login' first." >&2
     fi
-    echo "Auth:      Claude subscription (full-scope OAuth from persistent home)"
+    echo "Auth:      Claude subscription (full-scope OAuth from the agent home)"
 elif [[ "$AGENT" == claude && "$AUTH_MODE" == login ]]; then
     # Use the claude.ai login stored in home-claude/ by --claude-login. It is copied into
     # this run's home like the rest of that directory, and it carries a refresh token, so

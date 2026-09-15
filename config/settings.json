@@ -6,6 +6,7 @@
   "conda_pkgs_dir": null,
   "pixi_home": null,
   "cache_dir": null,
+  "agent_home_dir": null,
   "git_user_name": "euler-agent",
   "git_user_email": "euler-agent@noreply.invalid",
   "slurm": {
