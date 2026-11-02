@@ -28,6 +28,8 @@ OPTIONS
                               May be nested to group related work: "shi/omicsMSA" lives at
                               <workspace_dir>/shi/omicsMSA. Segments: [A-Za-z0-9._-].
                               Without --project, a fresh timestamped dir is created.
+  --workspace DIR             Use DIR (absolute) as the workspace instead of
+                              <workspace_dir>/<project>. --project still names the session.
   --max-budget-usd N          Hard USD spending cap (Claude only)
   --effort low|medium|high|xhigh|max
                               Thinking depth (Claude only)
@@ -148,6 +150,7 @@ MAX_BUDGET_USD=""
 AGENT_EFFORT=""
 AUTH_MODE=""
 PROJECT=""
+WORKSPACE_OVERRIDE=""
 REF_DIR=""
 EXTRA_BINDS=()
 EXTRA_READ_BINDS=()
@@ -170,6 +173,7 @@ while [[ $# -gt 0 ]]; do
         --effort)            AGENT_EFFORT="$2";        shift 2 ;;
         --auth)              AUTH_MODE="$2";           shift 2 ;;
         --project)           PROJECT="$2";             shift 2 ;;
+        --workspace)         WORKSPACE_OVERRIDE="$2";  shift 2 ;;
         --ref)               REF_DIR="$2";             shift 2 ;;
         --extra-bind)        EXTRA_BINDS+=("$2");      shift 2 ;;
         --extra-read-bind)   EXTRA_READ_BINDS+=("$2"); shift 2 ;;
@@ -290,9 +294,13 @@ if [[ -n "$PROJECT" ]]; then
         exit 1
     fi
     RUN_WORKSPACE="$WORKSPACE_DIR/$PROJECT"
+    if [[ -n "$WORKSPACE_OVERRIDE" ]]; then
+        [[ "$WORKSPACE_OVERRIDE" == /* ]] || { echo "ERROR: --workspace must be an absolute path (got '$WORKSPACE_OVERRIDE')" >&2; exit 1; }
+        RUN_WORKSPACE="${WORKSPACE_OVERRIDE%/}"
+    fi
     # A project that predates a workspace_dir change keeps its old location: if it does
     # not exist under workspace_dir but does under one of legacy_workspace_dirs, use that.
-    if [[ ! -d "$RUN_WORKSPACE" ]]; then
+    if [[ -z "$WORKSPACE_OVERRIDE" && ! -d "$RUN_WORKSPACE" ]]; then
         while IFS= read -r _legacy; do
             if [[ -n "$_legacy" && -d "$_legacy/$PROJECT" ]]; then
                 RUN_WORKSPACE="$_legacy/$PROJECT"
@@ -303,6 +311,9 @@ if [[ -n "$PROJECT" ]]; then
     fi
     # Slashes are fine in a path but not in a session name.
     PROJECT_SLUG="${PROJECT//\//-}"
+elif [[ -n "$WORKSPACE_OVERRIDE" ]]; then
+    echo "ERROR: --workspace requires --project (it names the session)." >&2
+    exit 1
 else
     RUN_WORKSPACE="$WORKSPACE_DIR/${AGENT}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-interactive}"
 fi
