@@ -24,13 +24,13 @@ For a local dry run, copy the repo to a temp dir and put stubs first on `PATH`: 
 that prints its arguments, a `singularity` that does the same, and on macOS a `realpath`
 supporting `-m` (BSD's doesn't). Point `config/settings.local.json` in the copy at temp dirs and
 set `HOME` to a temp dir — `euler-agent-run` writes into `~/.claude/projects` for session
-sharing. That exercises partition selection, time limits, presets and bind/workdir validation.
+sharing. That exercises partition selection, time limits, presets and bind validation.
 
 On the cluster:
 
 - `make install` / `make uninstall` — symlink `euler-agent-submit`, `euler-agent-run`, `gpu-avail` into `~/.local/bin`
 - Smoke test (login node): `bin/euler-agent-run --agent claude --project harness-test --interactive`, then `claude -p "reply with exactly: OK"`
-- Steerable session via SLURM: `euler-agent-submit --agent claude --remote-control --project NAME --time 8:00:00 [--extra-bind DIR --workdir DIR]`
+- Steerable session via SLURM: `euler-agent-submit --agent claude --remote-control --project NAME --time 8:00:00 [--workspace DIR]`
 - `test_slurm/*.sh` are standalone sbatch scripts for checking SLURM/GPU allocation, not tests of the harness
 
 Commits use conventional-commit style with a scope: `feat(run): …`, `fix(run): …`, `chore(image): …`, `docs: …`.
@@ -91,9 +91,9 @@ allocation flags go in `euler-agent-submit`.
 - **No git credentials in the container**, by design. `container-env.sh` sets the commit identity
   and points `core.hooksPath` at `config/git-hooks/`, whose `commit-msg` appends an agent
   `Co-Authored-By` trailer. The user pushes from the host.
-- **`--workdir`** (default: the workspace) must be the workspace, a bind destination or below
-  one; it is added to the trust and session-sharing lists, since Claude keys both by exact cwd.
-  `inner.sh` starts there, but `--repo` still clones into the workspace.
+- **The workspace is the starting directory**: `<workspace_dir>/<project>`, or any absolute
+  `--workspace DIR` (requires `--project`, which then only names the session). Claude keys trust
+  and session sharing by exact cwd, so the workspace is always in both lists.
 - A per-session `/tmp/agent-briefing.md` is generated from `config/agent-briefing.md` plus the
   actual mount table.
 

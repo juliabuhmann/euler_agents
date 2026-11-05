@@ -317,13 +317,14 @@ and the model and effort flags apply as normal. Transcripts persist either way (
 
 ```bash
 euler-agent-submit --agent claude --remote-control --project mywork --time 8:00:00 \
-    --extra-bind /path/to/repo --workdir /path/to/repo
+    --workspace       /scratch/$USER/agentic_ai/mywork \
+    --extra-read-bind /path/to/readonly/data
 ```
 
 A `claude.ai/code?environment=...` URL appears in `logs/slurm-<jobid>.out`. You cannot intervene
 on the node, and the session ends when `--time` runs out (at most 3 days on Curnagl).
-`--workdir` starts the session in one of the mounted directories instead of the workspace; it
-must be the workspace, a bind, or a directory below one.
+`--workspace` puts the workspace — where the session starts, read-write — at that directory
+instead of `<workspace_dir>/<project>`, e.g. a repo you cloned on the host.
 
 **Auto-start on a node you hold.** Steps 1–3 as above, then drop `--interactive` so the session
 starts immediately instead of giving you a shell:
@@ -463,6 +464,15 @@ Names may be nested to group related workspaces: `--project shi/omicsMSA` uses
 `<workspace_dir>/shi/omicsMSA`, creating the parent as needed. Each segment is limited to
 letters, digits, `.`, `_` and `-`; the Remote Control session is then named
 `euler-rc-shi-omicsMSA-<jobid>`.
+
+`--workspace DIR` (absolute, requires `--project`) uses DIR as the workspace instead of
+`<workspace_dir>/<project>`, creating it if needed; `--project` then only names the session.
+Use it to start the agent in a repo or results directory that lives elsewhere:
+
+```bash
+euler-agent-submit --agent claude --remote-control --project mywork \
+    --workspace ~/src/myrepo
+```
 
 > Do not run two jobs with the same `--project` in parallel — agents writing to the same
 > workspace will conflict. Run them sequentially.
