@@ -15,8 +15,10 @@ esac
 
 TRAILER="Co-Authored-By: ${AUTHOR} (${MODEL}) <${EMAIL}>"
 
-# Idempotent: skip if already present
-grep -qF "$TRAILER" "$COMMIT_MSG_FILE" && exit 0
+# Skip if a co-author from this agent's vendor is already there: Claude Code adds its own
+# trailer naming the model that actually ran (AGENT_MODEL is only the launch default).
+# Also makes the hook idempotent.
+grep -qiE "^Co-Authored-By:.*<${EMAIL}>" "$COMMIT_MSG_FILE" && exit 0
 
 # Git trailer convention: ensure a blank line before the trailer block
 if [[ -n "$(tail -1 "$COMMIT_MSG_FILE")" ]]; then
