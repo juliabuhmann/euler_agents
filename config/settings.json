@@ -21,7 +21,7 @@
     "model": "gpt-5.4"
   },
   "claude": {
-    "model": "claude-opus-4-8",
+    "model": "opus",
     "effort": null,
     "max_budget_usd": 10,
     "auth": "login"

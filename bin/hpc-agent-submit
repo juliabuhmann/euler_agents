@@ -22,7 +22,7 @@ OPTIONS
   --task   "PROMPT"       Task description passed to the agent
   --task-file FILE        Read task from a file instead of --task
   --repo   URL            Git repo to clone into the workspace before running
-  --model  MODEL          Override the model (e.g. claude-sonnet-4-6, gpt-5.4)
+  --model  MODEL          Override the model (e.g. opus, sonnet, claude-opus-5-5, gpt-5.4)
   --time   HH:MM:SS       SLURM wall-clock limit (default from config/settings.json)
   --interactive           Open a shell on a compute node via srun instead of sbatch
   --notify-success        Send a notification email on success (overrides config)

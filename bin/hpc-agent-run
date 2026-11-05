@@ -23,7 +23,7 @@ OPTIONS
   --task-file FILE            Read task from a file instead of --task
   --repo   URL                Git repo to clone into the workspace before running (public only:
                               the container holds no git credentials)
-  --model  MODEL              Model override (e.g. claude-sonnet-4-6, gpt-5.4)
+  --model  MODEL              Model override (e.g. opus, sonnet, claude-opus-5-5, gpt-5.4)
   --project NAME              Named workspace; persists and is reused across jobs.
                               May be nested to group related work: "shi/omicsMSA" lives at
                               <workspace_dir>/shi/omicsMSA. Segments: [A-Za-z0-9._-].
@@ -364,11 +364,17 @@ echo "Workspace: $RUN_WORKSPACE  (same path inside the container)"
 echo "Agent:     $AGENT"
 echo "Image:     $IMAGE_PATH"
 
+# The model is only decided here for headless runs (inner.sh passes --model). Interactive
+# and Remote Control sessions pick it in the session, so pass none rather than a setting
+# that may not be what ran; REPORT.md and the commit-msg hook read AGENT_MODEL.
+RUN_MODEL="${MODEL:-}"
+[[ "$INTERACTIVE" == true || "$REMOTE_CONTROL" == true ]] && RUN_MODEL=""
+
 # Build --env args for singularity
 SING_ENV=(
     --env "AGENT=$AGENT"
     --env "REPO_URL=${REPO_URL:-}"
-    --env "AGENT_MODEL=${MODEL:-}"
+    --env "AGENT_MODEL=$RUN_MODEL"
     --env "AGENT_MAX_BUDGET_USD=${MAX_BUDGET_USD:-}"
     --env "AGENT_EFFORT=${AGENT_EFFORT:-}"
     --env "HPC_AGENTS_DIR=$REPO_DIR"

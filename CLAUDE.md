@@ -92,7 +92,9 @@ allocation flags go in `hpc-agent-submit`.
   works only with `login` and requires `--project` (it names the session `hpc-rc-<project>-<jobid>`).
 - **No git credentials in the container**, by design. `container-env.sh` sets the commit identity
   and points `core.hooksPath` at `config/git-hooks/`, whose `commit-msg` appends an agent
-  `Co-Authored-By` trailer. The user pushes from the host.
+  `Co-Authored-By` trailer unless one with the agent's email is already there (Claude Code adds
+  its own). `AGENT_MODEL` is passed only for headless runs, so the hook and `REPORT.md` never
+  name a model that a session didn't actually use. The user pushes from the host.
 - **The workspace is the starting directory**: `<workspace_dir>/<project>`, or any absolute
   `--workspace DIR` (requires `--project`, which then only names the session). Claude keys trust
   and session sharing by exact cwd, so the workspace is always in both lists.

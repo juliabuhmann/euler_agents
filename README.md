@@ -387,7 +387,7 @@ cat <workspace_dir>/myanalysis/REPORT.md         # agent's own run summary
 `REPORT.md` gets one entry appended per run:
 
 ```
-## Run 2026-04-21T12:00:00Z  (job=12345  model=claude-sonnet-4-6  exit=0  cost=$1.2340)
+## Run 2026-04-21T12:00:00Z  (job=12345  model=opus  exit=0  cost=$1.2340)
 ```
 
 On a subscription the `cost=` figure is **notional** — computed from token usage at list prices,
@@ -527,9 +527,12 @@ guaranteed; rebuild the image if it misbehaves.
 
 | Flag | Controls | Default |
 |---|---|---|
-| `--model` | Model — haiku ≪ sonnet ≪ opus in cost | `claude-opus-4-8` |
+| `--model` | Model: an alias (`opus`, `sonnet`, `haiku`; haiku ≪ sonnet ≪ opus in cost) or a full ID such as `claude-opus-5-5` | `opus` |
 | `--effort` | Thinking depth: `low / medium / high / xhigh / max` | Claude default |
 | `--max-budget-usd` | Hard cap; the agent stops with `error_max_budget_usd` when hit | `10` |
+
+An alias resolves to the newest model of that family the image's Claude Code knows, so the
+default moves forward when the image is rebuilt; pass a full ID to pin one.
 
 Priority order: CLI flag > `config/task.json` > `config/settings.json`. To change the defaults
 for every run, edit the `"claude"` block in `config/settings.local.json`.
@@ -587,11 +590,13 @@ repo or a data file, and a single wrong `git push --force` on the wrong repo has
 - **Inside** the agent can `git clone` public repos, and `git commit` freely in any read-write
   bind. Commits are attributed to `git_user_name` / `git_user_email` from settings (default
   `hpc-agent`, override in `config/settings.local.json` if you want your own identity) and
-  carry a `Co-Authored-By` trailer naming the agent and model, added by
-  `config/git-hooks/commit-msg`:
+  carry one `Co-Authored-By` trailer naming the agent. Claude Code adds its own, with the
+  model that actually ran; `config/git-hooks/commit-msg` adds one only when the agent did
+  not (Codex, or Claude with its attribution turned off), naming the model only for headless
+  runs, where `--model` decided it:
 
   ```
-  Co-Authored-By: Claude (claude-opus-4-8) <noreply@anthropic.com>
+  Co-Authored-By: Codex (gpt-5.4) <noreply@openai.com>
   ```
 
 - **Outside**, when the run is done, you review and push from the host with your own
@@ -819,7 +824,7 @@ Claude-only.
 | | Codex | Claude |
 |---|---|---|
 | Auth | browser OAuth → `home-codex/` | subscription token or API key |
-| Default model | `gpt-5.4` | `claude-opus-4-8` |
+| Default model | `gpt-5.4` | `opus` |
 | Cost reporting | not implemented | `REPORT.md` (real with an API key, notional on a subscription) |
 | Budget cap | none | `--max-budget-usd` |
 

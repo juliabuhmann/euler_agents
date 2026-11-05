@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Appends a Co-Authored-By trailer identifying the AI agent that made the commit.
+# Appends a Co-Authored-By trailer identifying the AI agent that made the commit, unless the
+# agent already added one itself. Claude Code adds its own trailer, naming the model it
+# actually ran, so for Claude this usually does nothing; Codex adds none.
 # Reads AGENT and AGENT_MODEL from the container environment (set by hpc-agent-run).
+# AGENT_MODEL is set only for headless runs, where --model decides the model; in interactive
+# and Remote Control sessions the model is picked in the session, so it is left out.
 set -euo pipefail
 
 COMMIT_MSG_FILE="$1"
 AGENT="${AGENT:-unknown}"
-MODEL="${AGENT_MODEL:-unknown}"
+MODEL="${AGENT_MODEL:-}"
 
 case "$AGENT" in
     claude) AUTHOR="Claude";  EMAIL="noreply@anthropic.com" ;;
@@ -13,10 +17,10 @@ case "$AGENT" in
     *)      AUTHOR="$AGENT";  EMAIL="noreply@hpc-agents"  ;;
 esac
 
-TRAILER="Co-Authored-By: ${AUTHOR} (${MODEL}) <${EMAIL}>"
+# Already attributed (by the agent itself, or by an earlier run of this hook, e.g. on amend)
+grep -qiE "^Co-Authored-By:.*<${EMAIL}>" "$COMMIT_MSG_FILE" && exit 0
 
-# Idempotent: skip if already present
-grep -qF "$TRAILER" "$COMMIT_MSG_FILE" && exit 0
+TRAILER="Co-Authored-By: ${AUTHOR}${MODEL:+ (${MODEL})} <${EMAIL}>"
 
 # Git trailer convention: ensure a blank line before the trailer block
 if [[ -n "$(tail -1 "$COMMIT_MSG_FILE")" ]]; then

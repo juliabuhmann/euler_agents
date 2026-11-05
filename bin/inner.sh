@@ -118,7 +118,7 @@ case "$AGENT" in
         set -e
         ;;
     claude)
-        MODEL="${MODEL:-claude-opus-4-8}"
+        MODEL="${MODEL:-opus}"
         CLAUDE_ARGS=(--dangerously-skip-permissions --model "$MODEL" -p --output-format json)
         [[ -n "$MAX_BUDGET_USD" ]] && CLAUDE_ARGS+=(--max-budget-usd "$MAX_BUDGET_USD")
         [[ -n "$AGENT_EFFORT"   ]] && CLAUDE_ARGS+=(--effort "$AGENT_EFFORT")
