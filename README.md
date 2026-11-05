@@ -652,45 +652,36 @@ a compute node.
 | `config/secrets.local.env` | no | real credentials: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` (only needed for `--auth subscription|apikey`) |
 | `config/task.json` | yes | default task plus model/effort/budget/repo/project, used when no `--task`/`--task-file` is given |
 | `config/presets.json` | yes | named SLURM size presets for `hpc-agent-submit --preset` |
-| `config/agent-CLAUDE.md.template` | yes | environment description to copy into a bind as the agent's `CLAUDE.md` |
+| `config/agent-CLAUDE.md.template` | yes | template for a repository's `CLAUDE.md` with project notes (data, environments, conventions) |
 
 ### Telling the agent about its environment
 
 The agent does not know by itself that it is in a container on a cluster. The things that
 surprise it: `~` is `/home` and not your host home, there are no SLURM binaries so it cannot
-submit jobs, and the filesystem contains only what you bound. Three ways to tell it, from
-least to most effort:
+submit jobs, and the filesystem contains only what you bound.
 
-**1. Start the session with the generated briefing (interactive).** Every launch writes
-`/tmp/agent-briefing.md` inside the container. It contains a short generic explanation of the
-environment (from `config/agent-briefing.md`) followed by a table of this run's actual mounts and
-their modes. Hand it to the agent as the first message:
+**Claude is told automatically.** Every launch writes `/tmp/agent-briefing.md` inside the
+container: a short explanation of the environment (from `config/agent-briefing.md`) followed by
+this run's actual mounts and their modes. The agent home's user-level `CLAUDE.md`
+(`/home/.claude/CLAUDE.md`, rebuilt at every launch) imports it with `@/tmp/agent-briefing.md`,
+so Claude loads it at the start of every session — interactive, headless and Remote Control —
+without anything to paste. All containers share that one `CLAUDE.md`, but `/tmp` is private to
+each launch, so each container reads its own mount table. To check, ask the agent which mounts
+it has, or run `/memory` in an interactive session.
 
-```bash
-claude "$(cat /tmp/agent-briefing.md)"
-```
+That file starts with a copy of your own global `~/.claude/CLAUDE.md`, so your personal
+instructions apply inside the container too. Codex does not read it; paste the briefing there
+by hand (`cat /tmp/agent-briefing.md`).
 
-The container shell's banner reminds you of this command.
-
-**2. Paste `config/agent-briefing.md` by hand.** Same text as option 1 without the mount table.
-Useful when you are already inside a session.
-
-**3. Put a `CLAUDE.md` into the repository the agent works in (permanent).** Claude Code
-loads `CLAUDE.md` automatically from its working directory and that directory's parents, so a
-file committed to the repo is picked up in every session started there, without pasting
-anything. `config/agent-CLAUDE.md.template` is a starting point for such a file: the same
-explanation as the briefing, plus a mount table you fill in once for that repo. Copy it and edit
-the table:
+**Project knowledge goes in the repository's `CLAUDE.md`.** Where the data lives, which
+environment to use, how results are organised: put that in a `CLAUDE.md` in the directory the
+agent works in, and Claude loads it from there. `config/agent-CLAUDE.md.template` is a starting
+point. Host sessions in that directory read the same file, so keep container-specific statements
+out of it — the briefing covers those.
 
 ```bash
 cp config/agent-CLAUDE.md.template ~/src/myrepo/CLAUDE.md
 ```
-
-Placing it in this `euler_agents` repo would not work: it is mounted read-only and is not a
-parent of the agent's working directory.
-
-Independently of these, your own global `~/.claude/CLAUDE.md` is loaded in every run: the
-launcher copies it into the agent home at launch.
 
 ### Cluster profiles
 

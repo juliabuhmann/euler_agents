@@ -96,8 +96,12 @@ allocation flags go in `hpc-agent-submit`.
 - **The workspace is the starting directory**: `<workspace_dir>/<project>`, or any absolute
   `--workspace DIR` (requires `--project`, which then only names the session). Claude keys trust
   and session sharing by exact cwd, so the workspace is always in both lists.
-- A per-session `/tmp/agent-briefing.md` is generated from `config/agent-briefing.md` plus the
-  actual mount table.
+- **Briefing via import**: a per-launch `/tmp/agent-briefing.md` is generated from
+  `config/agent-briefing.md` plus the actual mount table. The agent home's
+  `.claude/CLAUDE.md` is rebuilt on every launch (atomically: temp file + `mv`) as the host's
+  global `~/.claude/CLAUDE.md` plus an `@/tmp/agent-briefing.md` import, so Claude loads it
+  in every mode. The file is shared, `/tmp` is per launch — never write per-launch content
+  into the shared home itself.
 
 ### Configuration
 
@@ -117,8 +121,9 @@ allocation flags go in `hpc-agent-submit`.
   effort, budget, repo_url, project) > per-agent defaults in settings.
 - `legacy_workspace_dirs`: a `--project` not found under `workspace_dir` is looked up there.
 - `config/presets.json` backs `--preset`.
-- `config/agent-CLAUDE.md.template` is a template users copy into their bind as the agent's
-  `CLAUDE.md`; it is not instructions for this repo.
+- `config/agent-CLAUDE.md.template` is a template for project notes users copy into their
+  repo as `CLAUDE.md` (host sessions read it too, so no container facts); it is not
+  instructions for this repo.
 
 ### Image
 

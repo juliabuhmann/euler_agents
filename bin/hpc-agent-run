@@ -338,14 +338,26 @@ SOURCE_HOME="${AGENT_HOME_DIR:-$REPO_DIR}/home-${AGENT}"
 mkdir -p "$SOURCE_HOME/.claude"
 JOB_HOME="$SOURCE_HOME"
 
-# The agent inherits the user's global ~/.claude/CLAUDE.md. The host home is never bound,
-# so a symlink would dangle inside the container; keep a real copy instead, refreshed on
-# every launch so edits to the global file propagate.
+# The agent's user-level CLAUDE.md (/home/.claude/CLAUDE.md inside): the user's global
+# ~/.claude/CLAUDE.md, then an import of this launch's /tmp/agent-briefing.md (written
+# below). The host home is never bound, so a symlink would dangle inside the container;
+# keep a real copy, rebuilt on every launch so edits to the global file propagate. The
+# file is shared by every container, but /tmp is per launch, so the same import line
+# resolves to each container's own briefing and mount table. Written to a temp file and
+# renamed, so a container starting at the same moment never reads a half-written file.
 _global_claude_md="$HOME/.claude/CLAUDE.md"
-if [[ -f "$_global_claude_md" ]]; then
-    rm -f "$JOB_HOME/.claude/CLAUDE.md"
-    cp "$_global_claude_md" "$JOB_HOME/.claude/CLAUDE.md"
-fi
+_agent_claude_md="$JOB_HOME/.claude/CLAUDE.md"
+_tmp_claude_md=$(mktemp "$JOB_HOME/.claude/.CLAUDE.md.XXXXXX")
+{
+    [[ -f "$_global_claude_md" ]] && { cat "$_global_claude_md"; printf '\n'; }
+    if [[ "$AGENT" == claude ]]; then
+        printf '# Container environment (added by hpc-agent-run)\n\n'
+        printf 'This session runs inside the hpc-agents container. The briefing below describes the\n'
+        printf 'environment and the exact mounts of this launch:\n\n'
+        printf '@/tmp/agent-briefing.md\n'
+    fi
+} > "$_tmp_claude_md"
+mv -f "$_tmp_claude_md" "$_agent_claude_md"
 
 echo "Agent home: $JOB_HOME  (persistent, shared by all containers)"
 echo "Workspace: $RUN_WORKSPACE  (same path inside the container)"
@@ -582,8 +594,8 @@ done
 
 # Per-session briefing for the agent: the generic text from config/agent-briefing.md
 # plus the actual mount table of this run. Lands in the job scratch, i.e. at
-# /tmp/agent-briefing.md inside the container, where an interactive user can paste it
-# or start with `claude "$(cat /tmp/agent-briefing.md)"`.
+# /tmp/agent-briefing.md inside the container, which the agent home's CLAUDE.md imports
+# (see above), so Claude loads it in every session without the user passing it.
 {
     cat "$REPO_DIR/config/agent-briefing.md"
     printf '\n## This cluster\n\n%s: %s\n' "$(_site "s['name']")" "$(_site "s.get('description', '')")"

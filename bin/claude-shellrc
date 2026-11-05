@@ -85,7 +85,7 @@ if [[ -z "${HPC_AGENTS_RC_LOADED:-}" ]]; then
         printf '  claude-rc       start a Remote Control session (steer from claude.ai/code or mobile)\n'
     printf '  /home           the persistent agent home, shared by all containers; /tmp is discarded\n'
     printf '  git             commit freely; there is no push credential — the user pushes from the host\n'
-    printf '  briefing        /tmp/agent-briefing.md describes this environment + its mounts;\n'
-    printf '                  start with:  claude "$(cat /tmp/agent-briefing.md)"\n'
+    printf '  briefing        /tmp/agent-briefing.md (environment + mounts) is loaded by claude\n'
+    printf '                  automatically, via the agent home'"'"'s CLAUDE.md\n'
     printf '\n'
 fi
