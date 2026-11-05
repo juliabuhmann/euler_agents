@@ -501,6 +501,11 @@ bind into the agent home, at the same encoded path. Effects:
   home quota, exactly as host sessions do).
 - Only those directories' transcripts are visible to the agent; read-only binds and the rest of
   your `~/.claude` are not.
+- The mounts sit in a `projects` folder private to each launch (`launches-claude/<launch>/`,
+  next to `home-claude/`), so parallel containers cannot disturb each other's. A session started
+  in a directory that is not shared lands there and is copied to your host `~/.claude/projects/`
+  when the container exits; if the host already has a different file of that name, the launch
+  folder is kept and the launcher prints its path.
 
 Resuming across Claude Code versions (the image's vs. your host's) usually works but is not
 guaranteed; rebuild the image if it misbehaves.

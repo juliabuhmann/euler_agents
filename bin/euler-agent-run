@@ -28,6 +28,8 @@ OPTIONS
                               May be nested to group related work: "shi/omicsMSA" lives at
                               <workspace_dir>/shi/omicsMSA. Segments: [A-Za-z0-9._-].
                               Without --project, a fresh timestamped dir is created.
+  --workspace DIR             Use DIR (absolute) as the workspace instead of
+                              <workspace_dir>/<project>. --project still names the session.
   --max-budget-usd N          Hard USD spending cap (Claude only)
   --effort low|medium|high|xhigh|max
                               Thinking depth (Claude only)
@@ -140,6 +142,7 @@ MAX_BUDGET_USD=""
 AGENT_EFFORT=""
 AUTH_MODE=""
 PROJECT=""
+WORKSPACE_OVERRIDE=""
 REF_DIR=""
 WORKDIR=""
 EXTRA_BINDS=()
@@ -163,6 +166,7 @@ while [[ $# -gt 0 ]]; do
         --effort)            AGENT_EFFORT="$2";        shift 2 ;;
         --auth)              AUTH_MODE="$2";           shift 2 ;;
         --project)           PROJECT="$2";             shift 2 ;;
+        --workspace)         WORKSPACE_OVERRIDE="$2";  shift 2 ;;
         --ref)               REF_DIR="$2";             shift 2 ;;
         --extra-bind)        EXTRA_BINDS+=("$2");      shift 2 ;;
         --extra-read-bind)   EXTRA_READ_BINDS+=("$2"); shift 2 ;;
@@ -292,9 +296,13 @@ if [[ -n "$PROJECT" ]]; then
         exit 1
     fi
     RUN_WORKSPACE="$WORKSPACE_DIR/$PROJECT"
+    if [[ -n "$WORKSPACE_OVERRIDE" ]]; then
+        [[ "$WORKSPACE_OVERRIDE" == /* ]] || { echo "ERROR: --workspace must be an absolute path (got '$WORKSPACE_OVERRIDE')" >&2; exit 1; }
+        RUN_WORKSPACE="${WORKSPACE_OVERRIDE%/}"
+    fi
     # A project that predates a workspace_dir change keeps its old location: if it does
     # not exist under workspace_dir but does under one of legacy_workspace_dirs, use that.
-    if [[ ! -d "$RUN_WORKSPACE" ]]; then
+    if [[ -z "$WORKSPACE_OVERRIDE" && ! -d "$RUN_WORKSPACE" ]]; then
         while IFS= read -r _legacy; do
             if [[ -n "$_legacy" && -d "$_legacy/$PROJECT" ]]; then
                 RUN_WORKSPACE="$_legacy/$PROJECT"
@@ -305,6 +313,9 @@ if [[ -n "$PROJECT" ]]; then
     fi
     # Slashes are fine in a path but not in a session name.
     PROJECT_SLUG="${PROJECT//\//-}"
+elif [[ -n "$WORKSPACE_OVERRIDE" ]]; then
+    echo "ERROR: --workspace requires --project (it names the session)." >&2
+    exit 1
 else
     RUN_WORKSPACE="$WORKSPACE_DIR/${AGENT}_$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-interactive}"
 fi
@@ -625,16 +636,63 @@ SING_ENV+=(--env "AGENT_WORKDIR=$START_DIR")
 # identical on both sides, so the encoded name is too: mount the host's directory for
 # the workspace and every read-write bind into the agent home at the same place.
 # Only those directories are exposed, not the rest of the host's ~/.claude.
+#
+# The mount points live in a projects folder private to this launch, bound over
+# /home/.claude/projects, never in the shared agent home. There, another container saw
+# them as empty folders and removed them; on Linux that detaches the mount in this
+# container, and Claude silently wrote the rest of the session into the shared home
+# (sessions split between host and home-claude, Oct 2026). The private folder sits next
+# to the agent home, not inside it, so no container can see another's. Sessions started
+# in a directory that is not shared land in it and are copied to the host when the
+# launch ends (_sync_launch_sessions); the folder is kept if anything could not be copied.
 _encode_project_dir() { python3 -c 'import re, sys; print(re.sub(r"[^A-Za-z0-9-]", "-", sys.argv[1]))' "$1"; }
 _host_projects="$HOME/.claude/projects"
+LAUNCH_DIR="$(dirname "$SOURCE_HOME")/launches-${AGENT}/$(date +%Y%m%d_%H%M%S).${SLURM_JOB_ID:-nojob}.$$"
+LAUNCH_PROJECTS="$LAUNCH_DIR/projects"
+mkdir -p "$LAUNCH_PROJECTS" "$JOB_HOME/.claude/projects"
+# Must precede the per-directory binds below: they mount inside it.
+SING_BINDS+=(--bind "$LAUNCH_PROJECTS:/home/.claude/projects")
 _shared_sessions=()
 for _dest in "${SESSION_DESTS[@]}"; do
     _enc=$(_encode_project_dir "$_dest")
-    mkdir -p "$_host_projects/$_enc" "$JOB_HOME/.claude/projects/$_enc"
+    mkdir -p "$_host_projects/$_enc" "$LAUNCH_PROJECTS/$_enc"
     SING_BINDS+=(--bind "$_host_projects/$_enc:/home/.claude/projects/$_enc")
     _shared_sessions+=("$_dest")
 done
 echo "Sessions:  shared with the host for ${_shared_sessions[*]}"
+echo "           other sessions go to $LAUNCH_PROJECTS and are copied to the host on exit"
+
+# Copy files from this launch's private projects folder to the host: only files the host
+# lacks; a host file with different content is left alone and the folder is kept for a
+# look. Runs on exit (bash runs it after the container has stopped), and also after a
+# SLURM time-limit SIGTERM. The shared folders' mount points are empty dirs on this side.
+_sync_launch_sessions() {
+    [[ -d "$LAUNCH_PROJECTS" ]] || return 0
+    python3 - "$LAUNCH_PROJECTS" "$_host_projects" "$LAUNCH_DIR" <<'PY' || true
+import filecmp, os, shutil, sys
+src, dst, launch = sys.argv[1:]
+kept = []
+for root, _, files in os.walk(src):
+    for f in files:
+        s = os.path.join(root, f)
+        rel = os.path.relpath(s, src)
+        d = os.path.join(dst, rel)
+        if os.path.exists(d):
+            if not filecmp.cmp(s, d, shallow=False):
+                kept.append(rel)
+            continue
+        os.makedirs(os.path.dirname(d), exist_ok=True)
+        shutil.copy2(s, d)
+        print(f"Sessions:  copied to the host: {rel}")
+if kept:
+    print(f"Sessions:  NOT copied (the host has a different file); kept in {launch}:")
+    for rel in kept:
+        print(f"             {rel}")
+else:
+    shutil.rmtree(launch, ignore_errors=True)
+PY
+}
+trap _sync_launch_sessions EXIT
 
 # Claude prompts for per-directory workspace trust the first time it starts in a
 # directory (Remote Control has no bypass flag for it at all); trust is keyed by path
