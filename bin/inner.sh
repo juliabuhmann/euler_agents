@@ -4,8 +4,8 @@
 set -euo pipefail
 
 # HOME, PATH, conda/cache dirs, git identity + hook — shared with the interactive rcfile.
-# The repo is bound at its host path, so it is addressed via EULER_AGENTS_DIR.
-source "${EULER_AGENTS_DIR:?EULER_AGENTS_DIR not set}/bin/container-env.sh"
+# The repo is bound at its host path, so it is addressed via HPC_AGENTS_DIR.
+source "${HPC_AGENTS_DIR:?HPC_AGENTS_DIR not set}/bin/container-env.sh"
 
 AGENT="${AGENT:?AGENT env var not set}"
 REPO_URL="${REPO_URL:-}"
@@ -19,7 +19,7 @@ JOB_ID="${SLURM_JOB_ID:-interactive}"
 # Verified: the `remote-control` subcommand runs headless (no TTY), unlike the
 # `--remote-control` flag which falls through to --print and demands stdin input.
 if [[ "${REMOTE_CONTROL:-}" == "true" ]]; then
-    RC_NAME="${RC_SESSION_NAME:-euler-rc}"
+    RC_NAME="${RC_SESSION_NAME:-hpc-rc}"
     cd "$AGENT_WORKSPACE"
     if [[ -n "$REPO_URL" ]]; then
         REPO_NAME=$(basename "$REPO_URL" .git)

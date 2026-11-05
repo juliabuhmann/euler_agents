@@ -46,7 +46,7 @@ From: ubuntu:24.04
     # Claude Code CLI
     npm install -g "@anthropic-ai/claude-code@{{ CLAUDE_CODE_VERSION }}"
     npm cache clean --force
-    echo "claude-code: $(claude --version)  codex: $(codex --version)" > /etc/euler-agents-versions
+    echo "claude-code: $(claude --version)  codex: $(codex --version)" > /etc/hpc-agents-versions
 
     # miniforge (conda + mamba) — agents create their own envs at runtime
     curl -fsSLo /tmp/miniforge.sh \

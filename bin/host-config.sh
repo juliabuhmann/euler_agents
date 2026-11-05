@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Sourced on the HOST by bin/euler-agent-run and bin/euler-agent-submit, so both resolve
+# Sourced on the HOST by bin/hpc-agent-run and bin/hpc-agent-submit, so both resolve
 # configuration the same way. Not executable on purpose.
 #
 # Expects REPO_DIR. Sets SETTINGS to a temp file holding the merged configuration:

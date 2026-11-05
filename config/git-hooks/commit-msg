@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Appends a Co-Authored-By trailer identifying the AI agent that made the commit.
-# Reads AGENT and AGENT_MODEL from the container environment (set by euler-agent-run).
+# Reads AGENT and AGENT_MODEL from the container environment (set by hpc-agent-run).
 set -euo pipefail
 
 COMMIT_MSG_FILE="$1"
@@ -10,7 +10,7 @@ MODEL="${AGENT_MODEL:-unknown}"
 case "$AGENT" in
     claude) AUTHOR="Claude";  EMAIL="noreply@anthropic.com" ;;
     codex)  AUTHOR="Codex";   EMAIL="noreply@openai.com"    ;;
-    *)      AUTHOR="$AGENT";  EMAIL="noreply@euler-agents"  ;;
+    *)      AUTHOR="$AGENT";  EMAIL="noreply@hpc-agents"  ;;
 esac
 
 TRAILER="Co-Authored-By: ${AUTHOR} (${MODEL}) <${EMAIL}>"

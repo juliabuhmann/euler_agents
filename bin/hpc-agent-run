@@ -2,20 +2,20 @@
 # Host-side launcher: resolves config, sets up workspace and tmpdir, fires Singularity.
 # Called by slurm/run-agent.sh (inside a SLURM job) or directly for interactive use.
 #
-# Usage: euler-agent-run [--agent codex|claude] [--task "prompt"] [--task-file FILE]
+# Usage: hpc-agent-run [--agent codex|claude] [--task "prompt"] [--task-file FILE]
 #                        [--repo URL] [--model MODEL] [--project NAME] [--interactive]
 #                        [--max-budget-usd N] [--effort low|medium|high|xhigh|max]
 set -euo pipefail
 
 usage() {
     cat <<'EOF'
-euler-agent-run — set up workspace and launch an agent inside the Singularity container
+hpc-agent-run — set up workspace and launch an agent inside the Singularity container
 
 USAGE
-  euler-agent-run [OPTIONS]
+  hpc-agent-run [OPTIONS]
 
 Called automatically by SLURM via slurm/run-agent.sh. You can also invoke it
-directly on a compute node (e.g. after euler-agent-submit --interactive).
+directly on a compute node (e.g. after hpc-agent-submit --interactive).
 
 OPTIONS
   --agent  codex|claude       Agent to run (default: codex)
@@ -77,14 +77,14 @@ Task resolution order (highest priority first):
 
 EXAMPLES
   # Run claude on a task (on a compute node or in an existing SLURM job)
-  euler-agent-run --agent claude --task "Write unit tests for src/utils.py" \
+  hpc-agent-run --agent claude --task "Write unit tests for src/utils.py" \
       --project myproject --max-budget-usd 5
 
   # Interactive shell inside the Singularity container
-  euler-agent-run --agent codex --project myproject --interactive
+  hpc-agent-run --agent codex --project myproject --interactive
 
   # Provide a reference dataset inside the container (read-only, same path as on the host)
-  euler-agent-run --agent claude --project myproject \
+  hpc-agent-run --agent claude --project myproject \
       --ref /cluster/project/beltrao/shared/data \
       --task "Analyse the CSV files in /cluster/project/beltrao/shared/data and write a summary."
 
@@ -126,8 +126,8 @@ HOST_CACHE_DIR=$(_setting "s.get('cache_dir') or ''")
 AGENT_HOME_DIR=$(_setting "s.get('agent_home_dir') or ''")
 # Commit identity for the agent. An identity, not a credential: no push token exists in
 # the container; the user pushes from the host after the run.
-GIT_USER_NAME=$(_setting "s.get('git_user_name') or 'euler-agent'")
-GIT_USER_EMAIL=$(_setting "s.get('git_user_email') or 'euler-agent@noreply.invalid'")
+GIT_USER_NAME=$(_setting "s.get('git_user_name') or 'hpc-agent'")
+GIT_USER_EMAIL=$(_setting "s.get('git_user_email') or 'hpc-agent@noreply.invalid'")
 
 # Parse args
 AGENT="codex"
@@ -170,7 +170,7 @@ while [[ $# -gt 0 ]]; do
         --remote-control)    REMOTE_CONTROL=true;      shift ;;
         --claude-login)      CLAUDE_LOGIN=true;        shift ;;
         --gpu)               GPU=true;                 shift ;;
-        --gpu-type)          shift 2 ;;  # consumed by euler-agent-submit, ignored here
+        --gpu-type)          shift 2 ;;  # consumed by hpc-agent-submit, ignored here
         --interactive)       INTERACTIVE=true;         shift ;;
         --notify-success)    NOTIFY_SUCCESS_OVERRIDE="true";  shift ;;
         --no-notify-success) NOTIFY_SUCCESS_OVERRIDE="false"; shift ;;
@@ -217,7 +217,7 @@ if [[ "$CLAUDE_LOGIN" == true ]]; then
         "$IMAGE_PATH" \
         bash -lc 'export HOME=/home; cd /home; claude auth login && echo && claude auth status'
     echo "If login succeeded, launch a steerable session with:"
-    echo "  euler-agent-submit --agent claude --remote-control --project NAME --time 8:00:00"
+    echo "  hpc-agent-submit --agent claude --remote-control --project NAME --time 8:00:00"
     exit 0
 fi
 
@@ -317,10 +317,10 @@ fi
 mkdir -p "$RUN_WORKSPACE"
 
 # Set up a per-LAUNCH tmpdir (becomes /tmp inside the container). Keyed on the PID as
-# well as the job id: on a held node every euler-agent-run shares one SLURM_JOB_ID, and
+# well as the job id: on a held node every hpc-agent-run shares one SLURM_JOB_ID, and
 # a shared tmpdir made the second launch reuse the first launch's home copy — with its
 # stale login — instead of re-seeding from home-<agent>/.
-JOB_TMPDIR="${TMPDIR:-/tmp}/euler-agents.${SLURM_JOB_ID:-nojob}.$$"
+JOB_TMPDIR="${TMPDIR:-/tmp}/hpc-agents.${SLURM_JOB_ID:-nojob}.$$"
 mkdir -p "$JOB_TMPDIR/scratch"
 
 # Write task to job-specific scratch (not workspace) to avoid races on parallel jobs
@@ -359,7 +359,7 @@ SING_ENV=(
     --env "AGENT_MODEL=${MODEL:-}"
     --env "AGENT_MAX_BUDGET_USD=${MAX_BUDGET_USD:-}"
     --env "AGENT_EFFORT=${AGENT_EFFORT:-}"
-    --env "EULER_AGENTS_DIR=$REPO_DIR"
+    --env "HPC_AGENTS_DIR=$REPO_DIR"
     --env "AGENT_WORKSPACE=$RUN_WORKSPACE"
     --env "GIT_USER_NAME=$GIT_USER_NAME"
     --env "GIT_USER_EMAIL=$GIT_USER_EMAIL"
@@ -390,11 +390,11 @@ fi
 #   apikey       — inject ANTHROPIC_API_KEY (pay-per-use, accurate cost reporting).
 if [[ "$REMOTE_CONTROL" == true ]]; then
     # Inject no credential: Remote Control uses the full-scope OAuth login stored in
-    # the persistent home (from `euler-agent-run --claude-login`). An injected
+    # the persistent home (from `hpc-agent-run --claude-login`). An injected
     # ANTHROPIC_API_KEY or inference-only token would be rejected by Remote Control.
     if [[ ! -f "$JOB_HOME/.claude/.credentials.json" ]]; then
         echo "WARNING: no OAuth credentials found in $JOB_HOME/.claude/.credentials.json." >&2
-        echo "         Remote Control will fail to start. Run 'euler-agent-run --claude-login' first." >&2
+        echo "         Remote Control will fail to start. Run 'hpc-agent-run --claude-login' first." >&2
     fi
     echo "Auth:      Claude subscription (full-scope OAuth from the agent home)"
 elif [[ "$AGENT" == claude && "$AUTH_MODE" == login ]]; then
@@ -405,7 +405,7 @@ elif [[ "$AGENT" == claude && "$AUTH_MODE" == login ]]; then
     if [[ ! -f "$JOB_HOME/.claude/.credentials.json" ]]; then
         echo "ERROR: --auth login needs a stored claude.ai login, and none was found in" >&2
         echo "       $SOURCE_HOME/.claude/.credentials.json" >&2
-        echo "       Run 'bin/euler-agent-run --claude-login' on a login node first." >&2
+        echo "       Run 'bin/hpc-agent-run --claude-login' on a login node first." >&2
         exit 1
     fi
     echo "Auth:      Claude subscription (stored claude.ai login)"
@@ -431,7 +431,7 @@ fi
 if [[ "$REMOTE_CONTROL" == true ]]; then
     SING_ENV+=(
         --env "REMOTE_CONTROL=true"
-        --env "RC_SESSION_NAME=euler-rc-${PROJECT_SLUG}-${SLURM_JOB_ID:-interactive}"
+        --env "RC_SESSION_NAME=hpc-rc-${PROJECT_SLUG}-${SLURM_JOB_ID:-interactive}"
     )
 fi
 

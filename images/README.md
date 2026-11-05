@@ -1,13 +1,13 @@
-# euler-agents Singularity images
+# hpc-agents Singularity images
 
 This directory holds the image definition for the agent runtime.
 
 ## Contents
 
-- `euler-agents.def` — the Singularity definition file. Builds an Ubuntu 24.04 image with:
+- `hpc-agents.def` — the Singularity definition file. Builds an Ubuntu 24.04 image with:
   - Node.js 24 + the two agent CLIs, `@anthropic-ai/claude-code` and `@openai/codex`, at the
     versions given by the build arguments `CLAUDE_CODE_VERSION` / `CODEX_VERSION`
-    (default `latest`; the versions installed are recorded in `/etc/euler-agents-versions`)
+    (default `latest`; the versions installed are recorded in `/etc/hpc-agents-versions`)
   - Miniforge (conda + mamba) at `/opt/conda` — agents create their own envs at runtime
   - `uv` for fast pip installs; plus `git`, `curl`, `bubblewrap`, build tools, etc.
 
@@ -15,7 +15,7 @@ The built `.sif` files live **outside the repo**, in a project directory such as
 `/work/<project_dir>/agentic_ai/images/` on Curnagl (on Euler:
 `/cluster/project/beltrao/jbuhmann/agentic_ai/images/`). The active image is selected by the
 `image_path` key in `config/settings.local.json` (which overrides `config/settings.json` —
-`euler-agent-run` merges local over base, so the `.local` value wins).
+`hpc-agent-run` merges local over base, so the `.local` value wins).
 
 **Rebuilding is how you pick up new CLI / model support** — the `.def` itself usually needs no
 edit. Pass the CLI version you run on the host as a build argument so the container and your
@@ -52,8 +52,8 @@ export APPTAINER_TMPDIR="${TMPDIR:-/tmp}/apptainer_tmp"; mkdir -p "$APPTAINER_TM
 
 singularity build --fakeroot \
     --build-arg CLAUDE_CODE_VERSION="$(claude --version | awk '{print $1}')" \
-    /work/<project_dir>/agentic_ai/images/euler-agents-$(date +%Y%m%d).sif \
-    images/euler-agents.def
+    /work/<project_dir>/agentic_ai/images/hpc-agents-$(date +%Y%m%d).sif \
+    images/hpc-agents.def
 ```
 
 `claude --version` on the host prints e.g. `2.1.263 (Claude Code)`; the `awk` keeps the number.
@@ -65,21 +65,21 @@ untouched: if the build fails, nothing in production breaks.
 Confirm the installed versions and that the stored login works, without touching the config:
 
 ```bash
-IMG=/work/<project_dir>/agentic_ai/images/euler-agents-YYYYMMDD.sif
+IMG=/work/<project_dir>/agentic_ai/images/hpc-agents-YYYYMMDD.sif
 singularity exec --cleanenv --containall --home "$PWD/home-claude:/home" "$IMG" \
-    bash -lc 'export HOME=/home; cat /etc/euler-agents-versions; claude auth status'
+    bash -lc 'export HOME=/home; cat /etc/hpc-agents-versions; claude auth status'
 ```
 
 `auth status` should report `loggedIn: true`. Then run a real task through the launcher after
 step 4 (e.g. the interactive smoke test from the main README).
 
-### 4. Point euler-agents at the new image
+### 4. Point hpc-agents at the new image
 
 Edit `image_path` in `config/settings.local.json` (the effective override; also update
 `config/settings.json` to keep the committed default in sync):
 
 ```json
-"image_path": "/work/<project_dir>/agentic_ai/images/euler-agents-YYYYMMDD.sif",
+"image_path": "/work/<project_dir>/agentic_ai/images/hpc-agents-YYYYMMDD.sif",
 ```
 
 Rollback = point `image_path` back at the previous `.sif`. No rebuild needed.
@@ -88,6 +88,10 @@ Auth is **not** affected by a rebuild: the Claude login lives in `home-claude/` 
 in `home-codex/` (each mounted as the agent's `$HOME`) — both are outside the image.
 
 ## Rebuild log
+
+Entries before the rename keep their original names: images were `euler-agents-*.sif`, built
+from `euler-agents.def`, with versions in `/etc/euler-agents-versions`. Those images still work;
+no script reads the versions file.
 
 ### 2026-10-01 — `euler-agents-20261001.sif` (Claude Code update to 2.1.286)
 
