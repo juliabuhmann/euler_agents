@@ -715,7 +715,7 @@ submit jobs, and the filesystem contains only what you bound.
 container: a short explanation of the environment (from `config/agent-briefing.md`) followed by
 this run's actual mounts and their modes, and — inside a SLURM job — when the job will be
 killed, with a one-liner to check the remaining time and the instruction to wrap up (commit,
-write notes) about 30 minutes before. The agent home's user-level `CLAUDE.md`
+write notes) in the last 3–30 minutes, scaled to the job length. The agent home's user-level `CLAUDE.md`
 (`/home/.claude/CLAUDE.md`, rebuilt at every launch) imports it with `@/tmp/agent-briefing.md`,
 so Claude loads it at the start of every session — interactive, headless and Remote Control —
 without anything to paste. All containers share that one `CLAUDE.md`, but `/tmp` is private to

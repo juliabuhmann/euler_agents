@@ -653,6 +653,11 @@ done
         fi
     fi
     if [[ -n "$_end_epoch" ]]; then
+        # Wrap-up margin: 10% of the time left at launch, clamped to 3–30 min, so a short
+        # job is not in wrap-up mode from the start.
+        _wrap=$(( (_end_epoch - $(date +%s)) / 600 ))
+        (( _wrap < 3 )) && _wrap=3
+        (( _wrap > 30 )) && _wrap=30
         printf '\n## Time limit\n\n'
         printf 'This session runs in SLURM job %s, which is killed at **%s** (%s).\n' \
             "$SLURM_JOB_ID" "$(date -d "@$_end_epoch" '+%Y-%m-%d %H:%M %Z')" \
@@ -660,8 +665,8 @@ done
         printf 'You have no clock of your own: check the remaining time before long steps with\n\n'
         printf '    echo $(( (%s - $(date +%%s)) / 60 )) minutes left\n\n' "$_end_epoch"
         printf 'Do not start a step that cannot finish in the remaining time; split or checkpoint it\n'
-        printf 'instead. About 30 minutes before the end, start nothing new: commit, write the\n'
-        printf 'current state and next steps to the workspace, and tell the user.\n'
+        printf 'instead. In the last %d minutes, start nothing new: commit, write the current state\n' "$_wrap"
+        printf 'and next steps to the workspace, and tell the user. Until then, work normally.\n'
     fi
 } > "$JOB_TMPDIR/scratch/agent-briefing.md"
 
