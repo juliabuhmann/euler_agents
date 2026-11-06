@@ -104,7 +104,8 @@ allocation flags go in `hpc-agent-submit`.
   `--workspace DIR` (requires `--project`, which then only names the session). Claude keys trust
   and session sharing by exact cwd, so the workspace is always in both lists.
 - **Briefing via import**: a per-launch `/tmp/agent-briefing.md` is generated from
-  `config/agent-briefing.md` plus the actual mount table. The agent home's
+  `config/agent-briefing.md` plus the actual mount table and, inside a SLURM job, the job's
+  end time (`SLURM_JOB_END_TIME`, else `squeue -o %e`). The agent home's
   `.claude/CLAUDE.md` is rebuilt on every launch (atomically: temp file + `mv`) as the host's
   global `~/.claude/CLAUDE.md` plus an `@/tmp/agent-briefing.md` import, so Claude loads it
   in every mode. The file is shared, `/tmp` is per launch — never write per-launch content

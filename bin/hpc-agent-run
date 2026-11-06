@@ -640,6 +640,29 @@ done
     done
     printf '| `/home` | rw, private agent home (`~`), not the user'"'"'s home |\n'
     printf '| `/tmp` | rw, node-local scratch, gone after the job |\n'
+    # When the job is killed. Only inside a SLURM job (not on a login node, nor in a shell
+    # that reached a held node by plain ssh). SLURM_JOB_END_TIME (epoch) where SLURM sets
+    # it, else squeue; an extension granted later is not reflected.
+    _end_epoch=""
+    if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+        if [[ "${SLURM_JOB_END_TIME:-}" =~ ^[0-9]+$ ]]; then
+            _end_epoch=$SLURM_JOB_END_TIME
+        else
+            _end=$(squeue -h -j "$SLURM_JOB_ID" -o %e 2>/dev/null || true)
+            [[ "$_end" =~ ^[0-9]{4}- ]] && _end_epoch=$(date -d "$_end" +%s 2>/dev/null || true)
+        fi
+    fi
+    if [[ -n "$_end_epoch" ]]; then
+        printf '\n## Time limit\n\n'
+        printf 'This session runs in SLURM job %s, which is killed at **%s** (%s).\n' \
+            "$SLURM_JOB_ID" "$(date -d "@$_end_epoch" '+%Y-%m-%d %H:%M %Z')" \
+            "$(date -u -d "@$_end_epoch" '+%Y-%m-%d %H:%M UTC')"
+        printf 'You have no clock of your own: check the remaining time before long steps with\n\n'
+        printf '    echo $(( (%s - $(date +%%s)) / 60 )) minutes left\n\n' "$_end_epoch"
+        printf 'Do not start a step that cannot finish in the remaining time; split or checkpoint it\n'
+        printf 'instead. About 30 minutes before the end, start nothing new: commit, write the\n'
+        printf 'current state and next steps to the workspace, and tell the user.\n'
+    fi
 } > "$JOB_TMPDIR/scratch/agent-briefing.md"
 
 # Share Claude sessions with the host, per directory. Claude keeps transcripts (and

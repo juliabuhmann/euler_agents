@@ -28,4 +28,5 @@ the start of every session. Codex does not; paste it there by hand.
 - **Where to write.** Results and generated output into the workspace or another read-write
   mount, never into read-only data. Scratch into `/tmp`, which vanishes with the job.
 - **The job has a wall-clock limit** and ends without warning when it is reached. Keep the
-  user informed of long-running steps.
+  user informed of long-running steps. When the launcher knows the end time, it is in the
+  *Time limit* section below.
