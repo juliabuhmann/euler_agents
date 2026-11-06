@@ -172,6 +172,29 @@ except Exception as e:
     print("Warning: could not extract summary from claude-output.json: %s" % e, file=sys.stderr)
 '
     fi
+    # Tool calls Claude was not allowed to make. With --dangerously-skip-permissions there
+    # should be none; if there are, a policy is overriding the bypass (typically the
+    # claude.ai organisation's managed settings, see README "Organisation policies") and
+    # the task most likely did not get done, although claude itself exits 0. Count the
+    # run as failed so it shows up in REPORT.md, the exit code and failure emails.
+    PERMISSION_DENIALS=$(python3 -c '
+import collections, json
+try:
+    d = json.load(open("/tmp/claude-output.json"))
+except Exception:
+    raise SystemExit
+names = collections.Counter(x.get("tool_name", "?") for x in d.get("permission_denials") or [])
+print(", ".join("%s x%d" % kv for kv in names.most_common()))
+')
+    if [[ -n "$PERMISSION_DENIALS" ]]; then
+        {
+            echo "=== WARNING: Claude was denied tool calls despite --dangerously-skip-permissions ==="
+            echo "  denied: $PERMISSION_DENIALS"
+            echo "  Most likely a managed policy disables bypass mode; check /status inside the"
+            echo "  container for 'Enterprise managed settings'. See README, Organisation policies."
+        } >&2
+        [[ "$AGENT_EXIT" -eq 0 ]] && AGENT_EXIT=3
+    fi
     # On failure, surface Claude's raw JSON to the job log — otherwise the stop
     # reason (budget cap, max turns, API/auth error) dies with the container tmpdir.
     if [[ "$AGENT_EXIT" -ne 0 ]]; then
@@ -199,6 +222,9 @@ if [[ -f /tmp/run-summary.txt ]]; then
     {
         printf '\n## Run %s  (job=%s  model=%s  exit=%s%s)\n\n' \
             "$RUN_TS" "$JOB_ID" "$MODEL" "$AGENT_EXIT" "${AGENT_COST:+  cost=\$$AGENT_COST}"
+        [[ -n "${PERMISSION_DENIALS:-}" ]] && \
+            printf '**Permission denials:** %s. Bypass mode was not in effect, so this run is marked failed; see the job log.\n\n' \
+                "$PERMISSION_DENIALS"
         cat /tmp/run-summary.txt
     } >> "$AGENT_WORKSPACE/REPORT.md"
     echo "=== Summary appended to $AGENT_WORKSPACE/REPORT.md ==="

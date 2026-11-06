@@ -663,6 +663,35 @@ What it does **not** protect against:
 Treat anything you pass to the agent the way you would treat code you are about to `bash -c` on
 a compute node.
 
+### Organisation policies
+
+If your claude.ai account belongs to a Team or Enterprise organisation, its admins can push
+**managed settings** that apply to every session logged in with that account, including the one
+in the container. The harness cannot override them, and does not try. A policy that disables
+bypass-permissions mode breaks the unattended modes: Claude asks for approval that nobody can
+give, so tool calls such as `Write` or `Bash` are denied.
+
+Symptoms:
+
+- A headless job ends with exit code 3 and the log shows
+  `WARNING: Claude was denied tool calls despite --dangerously-skip-permissions`. `REPORT.md`
+  lists the denied tools. (`claude -p` itself exits 0 in this case. `inner.sh` checks
+  `permission_denials` in its JSON output and marks the run failed.)
+- A Remote Control session keeps asking for approval in the app.
+- `/status` in an interactive container lists `Enterprise managed settings (remote)` under
+  *Setting sources*. `/permissions` shows which rules come from the policy.
+
+What to do:
+
+- Ask your organisation's claude.ai admin to allow bypass-permissions mode for your account. The
+  table above describes what the container does and does not protect, which helps make the case.
+- Or log in to the container with an account that is not under that policy
+  (`hpc-agent-run --claude-login`), if your organisation allows that for this work.
+- Interactive sessions still work, as long as you approve each step yourself.
+
+Don't recreate bypass mode by putting broad allow rules (all of `Bash`, `Write`, `Edit`) into the
+agent home's settings. That gets around a decision your organisation made deliberately.
+
 ### Configuration files
 
 | File | Tracked | Holds |

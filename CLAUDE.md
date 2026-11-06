@@ -45,7 +45,9 @@ Call chain for a headless job:
 hpc-agent-submit  (host, login node: resources, presets, partition, max-time check; sbatch)
   └─ slurm/run-agent.sh  (in the SLURM job: thin, cluster-neutral wrapper)
        └─ bin/hpc-agent-run  (host side on the compute node: site modules, config, workspace, binds, auth; container exec)
-            └─ bin/inner.sh  (inside the container: clone repo, run claude -p / codex exec, append REPORT.md)
+            └─ bin/inner.sh  (inside the container: clone repo, run claude -p / codex exec, append REPORT.md;
+                              any `permission_denials` in claude's JSON → exit 3, since a managed
+                              org policy can silently disable bypass mode while claude exits 0)
             └─ bin/notify.sh (host side, after the container exits: optional email)
 ```
 
