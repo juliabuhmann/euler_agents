@@ -329,6 +329,23 @@ on the node, and the session ends when `--time` runs out (at most 3 days on Curn
 `--workspace` puts the workspace — where the session starts, read-write — at that directory
 instead of `<workspace_dir>/<project>`, e.g. a repo you cloned on the host.
 
+**Continue a session after the job ended** (e.g. it hit `--time`): submit again with the same
+`--project` and workspace, plus one of
+
+| Flag | Reattaches to | Passed as |
+|---|---|---|
+| `--rc-continue` | the Remote Control session last recorded for the workspace — only within roughly 4 hours of it | `claude remote-control --continue` |
+| `--rc-session-id ID` | that session | `claude remote-control --session-id ID` |
+
+```bash
+hpc-agent-submit --agent claude --remote-control --rc-continue --project mywork --time 8:00:00 \
+    --workspace /scratch/$USER/agentic_ai/mywork --extra-read-bind /path/to/readonly/data
+```
+
+The record should be in the shared agent home, so a new job can find it. Past the 4-hour window there
+is nothing to reattach to: start a new session and point it at the previous results. The same
+flags work with `--interactive`, where `claude-rc` then reattaches.
+
 **Auto-start on a node you hold.** Steps 1–3 as above, then drop `--interactive` so the session
 starts immediately instead of giving you a shell:
 

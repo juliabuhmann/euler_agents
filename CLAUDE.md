@@ -90,6 +90,9 @@ allocation flags go in `hpc-agent-submit`.
   from `--claude-login`), `subscription` (`CLAUDE_CODE_OAUTH_TOKEN`), `apikey` (`ANTHROPIC_API_KEY`).
   Credentials come from `config/secrets.env` / `config/secrets.local.env`. `--remote-control`
   works only with `login` and requires `--project` (it names the session `hpc-rc-<project>-<jobid>`).
+  `--rc-continue` / `--rc-session-id ID` (need `--remote-control`, mutually exclusive) reattach
+  to an earlier session via `claude remote-control --continue` / `--session-id`; `inner.sh` and
+  `claude-rc` add them to the usual `--name` + `--permission-mode` flags.
 - **No git credentials in the container**, by design. `container-env.sh` sets the commit identity
   and points `core.hooksPath` at `config/git-hooks/`, whose `commit-msg` appends an agent
   `Co-Authored-By` trailer unless one with the agent's email is already there (Claude Code adds

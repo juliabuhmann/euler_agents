@@ -55,6 +55,14 @@ claude-rc() {
     local args=("$@")
     [[ " $* " == *" --permission-mode "* ]] || args=(--permission-mode bypassPermissions "${args[@]+"${args[@]}"}")
     [[ " $* " == *" --name "*            ]] || args=(--name "${RC_SESSION_NAME:-hpc-rc}" "${args[@]+"${args[@]}"}")
+    # --rc-continue / --rc-session-id given to hpc-agent-run, unless the caller chose here.
+    if [[ " $* " != *" --continue "* && " $* " != *" -c "* && " $* " != *" --session-id "* ]]; then
+        if [[ -n "${RC_SESSION_ID:-}" ]]; then
+            args+=(--session-id "$RC_SESSION_ID")
+        elif [[ "${RC_CONTINUE:-}" == "true" ]]; then
+            args+=(--continue)
+        fi
+    fi
     echo "Starting Remote Control in $PWD"
     echo "Pick it up at https://claude.ai/code or in the Claude mobile app."
     command claude remote-control "${args[@]}"

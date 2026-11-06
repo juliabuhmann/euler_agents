@@ -54,7 +54,8 @@ OPTIONS
 
 Without --task / --task-file, reads the task from config/task.json.
 Additional flags (--project, --workspace, --max-budget-usd, --effort, --auth, --ref,
---extra-bind, --extra-read-bind, --binds-file, --remote-control) are forwarded to
+--extra-bind, --extra-read-bind, --binds-file, --remote-control, --rc-continue,
+--rc-session-id) are forwarded to
 hpc-agent-run; see: hpc-agent-run --help
   --extra-bind SPEC            Bind an extra host path read-write into the container (repeatable).
   --extra-read-bind SPEC       Bind an extra host path read-only into the container (repeatable).

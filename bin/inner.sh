@@ -45,8 +45,17 @@ PY
     echo "------------"
     # Auto-answer the 'Enable Remote Control?' prompt (no TTY under SLURM), and bypass
     # per-action approvals so the agent can work unattended while you steer intermittently.
+    # --rc-continue / --rc-session-id reattach to an earlier session instead of creating one.
+    RC_ARGS=(--name "$RC_NAME" --permission-mode bypassPermissions)
+    if [[ -n "${RC_SESSION_ID:-}" ]]; then
+        RC_ARGS+=(--session-id "$RC_SESSION_ID")
+        echo "Reattaching to Remote Control session $RC_SESSION_ID"
+    elif [[ "${RC_CONTINUE:-}" == "true" ]]; then
+        RC_ARGS+=(--continue)
+        echo "Reattaching to the last Remote Control session recorded for $PWD (within ~4 h)"
+    fi
     set +e
-    printf 'y\n' | claude remote-control --name "$RC_NAME" --permission-mode bypassPermissions
+    printf 'y\n' | claude remote-control "${RC_ARGS[@]}"
     RC_EXIT=$?
     set -e
     exit "$RC_EXIT"

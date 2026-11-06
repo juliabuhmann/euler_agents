@@ -67,6 +67,12 @@ OPTIONS
                               do not apply (it runs on the stored OAuth login).
                               Combine with --interactive to get a container shell instead of
                               starting the session immediately, then run 'claude-rc' yourself.
+  --rc-continue               With --remote-control: reattach to the Remote Control session last
+                              recorded for the workspace instead of starting a new one
+                              ('claude remote-control --continue'; only works within roughly
+                              4 hours of that session).
+  --rc-session-id ID          With --remote-control: reattach to a specific Remote Control session
+                              by ID ('claude remote-control --session-id ID').
   -h, --help                  Show this help
 
 Task resolution order (highest priority first):
@@ -148,6 +154,8 @@ INTERACTIVE=false
 GPU=false
 NOTIFY_SUCCESS_OVERRIDE=""
 REMOTE_CONTROL=false
+RC_CONTINUE=false
+RC_SESSION_ID=""
 CLAUDE_LOGIN=false
 
 while [[ $# -gt 0 ]]; do
@@ -168,6 +176,8 @@ while [[ $# -gt 0 ]]; do
         --extra-read-bind)   EXTRA_READ_BINDS+=("$2"); shift 2 ;;
         --binds-file)        BIND_FILES+=("$2");       shift 2 ;;
         --remote-control)    REMOTE_CONTROL=true;      shift ;;
+        --rc-continue)       RC_CONTINUE=true;         shift ;;
+        --rc-session-id)     RC_SESSION_ID="$2";       shift 2 ;;
         --claude-login)      CLAUDE_LOGIN=true;        shift ;;
         --gpu)               GPU=true;                 shift ;;
         --gpu-type)          shift 2 ;;  # consumed by hpc-agent-submit, ignored here
@@ -269,6 +279,16 @@ fi
 if [[ "$REMOTE_CONTROL" == true ]]; then
     [[ "$AGENT" == claude ]] || { echo "ERROR: --remote-control is claude-only." >&2; exit 1; }
     [[ -n "$PROJECT"      ]] || { echo "ERROR: --remote-control requires --project (it names the Remote Control session)." >&2; exit 1; }
+fi
+# Reattaching to an earlier Remote Control session: the CLI rejects --continue together
+# with --session-id, so catch that (and use without --remote-control) here, with the flag names.
+if [[ "$RC_CONTINUE" == true || -n "$RC_SESSION_ID" ]]; then
+    [[ "$REMOTE_CONTROL" == true ]] || { echo "ERROR: --rc-continue / --rc-session-id need --remote-control." >&2; exit 1; }
+    [[ "$RC_CONTINUE" == true && -n "$RC_SESSION_ID" ]] && { echo "ERROR: use either --rc-continue or --rc-session-id, not both." >&2; exit 1; }
+    if [[ -n "$RC_SESSION_ID" && ! "$RC_SESSION_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        echo "ERROR: --rc-session-id takes a session ID (letters, digits, '_', '-'), got '$RC_SESSION_ID'." >&2
+        exit 1
+    fi
 fi
 
 # Load API credentials (secrets.env is the template; secrets.local.env holds real values)
@@ -450,7 +470,11 @@ if [[ "$REMOTE_CONTROL" == true ]]; then
     SING_ENV+=(
         --env "REMOTE_CONTROL=true"
         --env "RC_SESSION_NAME=hpc-rc-${PROJECT_SLUG}-${SLURM_JOB_ID:-interactive}"
+        --env "RC_CONTINUE=$RC_CONTINUE"
+        --env "RC_SESSION_ID=$RC_SESSION_ID"
     )
+    [[ "$RC_CONTINUE" == true ]] && echo "Remote:    reattach to the last Remote Control session of the workspace"
+    [[ -n "$RC_SESSION_ID" ]]    && echo "Remote:    reattach to Remote Control session $RC_SESSION_ID"
 fi
 
 # Identity binds: every host directory appears at its own path inside the container, so
