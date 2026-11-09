@@ -17,10 +17,13 @@ case "$AGENT" in
     *)      AUTHOR="$AGENT";  EMAIL="noreply@hpc-agents"  ;;
 esac
 
-# Already attributed (by the agent itself, or by an earlier run of this hook, e.g. on amend)
-grep -qiE "^Co-Authored-By:.*<${EMAIL}>" "$COMMIT_MSG_FILE" && exit 0
 
-TRAILER="Co-Authored-By: ${AUTHOR}${MODEL:+ (${MODEL})} <${EMAIL}>"
+TRAILER="Co-Authored-By: ${AUTHOR} (${MODEL}) <${EMAIL}>"
+
+# Skip if a co-author from this agent's vendor is already there: Claude Code adds its own
+# trailer naming the model that actually ran (AGENT_MODEL is only the launch default).
+# Also makes the hook idempotent.
+grep -qiE "^Co-Authored-By:.*<${EMAIL}>" "$COMMIT_MSG_FILE" && exit 0
 
 # Git trailer convention: ensure a blank line before the trailer block
 if [[ -n "$(tail -1 "$COMMIT_MSG_FILE")" ]]; then
