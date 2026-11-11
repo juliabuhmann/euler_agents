@@ -23,7 +23,9 @@ the start of every session. Codex does not; paste it there by hand.
   real paths and ask the user to submit it from outside.
 - **No root.** `apt-get` cannot install anything. Use conda, pixi or uv.
 - **Git: commit, do not push.** There is no push credential. Commit in a read-write mount
-  with the preset identity (a `Co-Authored-By` trailer is added automatically), leave the
+  with the preset identity. Claude: end each message with one `Co-Authored-By` trailer naming
+  the model you are (the commit hook rejects a Claude commit without one); for Codex the hook
+  adds it. Leave the
   work on a branch, and tell the user what to push.
 - **Where to write.** Results and generated output into the workspace or another read-write
   mount, never into read-only data. Scratch into `/tmp`, which vanishes with the job.

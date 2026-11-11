@@ -607,10 +607,12 @@ repo or a data file, and a single wrong `git push --force` on the wrong repo has
 - **Inside** the agent can `git clone` public repos, and `git commit` freely in any read-write
   bind. Commits are attributed to `git_user_name` / `git_user_email` from settings (default
   `hpc-agent`, override in `config/settings.local.json` if you want your own identity) and
-  carry one `Co-Authored-By` trailer naming the agent. Claude Code adds its own, with the
-  model that actually ran; `config/git-hooks/commit-msg` adds one only when the agent did
-  not (Codex, or Claude with its attribution turned off), naming the model only for headless
-  runs, where `--model` decided it:
+  carry one `Co-Authored-By` trailer naming the agent. The identity is also exported as
+  `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, so a repo-local `user.name` / `user.email` cannot
+  override it. `config/git-hooks/commit-msg` keeps one trailer per vendor (the first) in a
+  single block with Co-Authored-By last. Claude Code adds its own, with the model that actually
+  ran; a Claude commit without one is rejected, since the hook cannot know the model. For Codex
+  the hook adds one, naming the model only for headless runs, where `--model` decided it:
 
   ```
   Co-Authored-By: Codex (gpt-5.4) <noreply@openai.com>

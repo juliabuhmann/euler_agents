@@ -1,33 +1,65 @@
-#!/usr/bin/env bash
-# Appends a Co-Authored-By trailer identifying the AI agent that made the commit, unless the
-# agent already added one itself. Claude Code adds its own trailer, naming the model it
-# actually ran, so for Claude this usually does nothing; Codex adds none.
+#!/usr/bin/env python3
+# commit-msg hook: normalises the trailer block of agent commits.
 # Reads AGENT and AGENT_MODEL from the container environment (set by hpc-agent-run).
-# AGENT_MODEL is set only for headless runs, where --model decides the model; in interactive
-# and Remote Control sessions the model is picked in the session, so it is left out.
-set -euo pipefail
+# - Keeps exactly one Co-Authored-By per vendor email (the first, i.e. the one the agent
+#   wrote, which names the model that actually ran) and drops any others.
+# - Puts all trailers in one block after a single blank line, Co-Authored-By last
+#   (GitHub shows the co-author reliably only then).
+# - Claude commits without a Claude Co-Authored-By are rejected: the hook cannot know which
+#   model ran (AGENT_MODEL is set only for headless runs, and is only the launch default),
+#   so the agent must add the trailer itself.
+# - Other agents (Codex) without one get a trailer from AGENT / AGENT_MODEL; the "(model)"
+#   part is left out when AGENT_MODEL is empty (interactive and Remote Control sessions).
+import os
+import re
+import sys
 
-COMMIT_MSG_FILE="$1"
-AGENT="${AGENT:-unknown}"
-MODEL="${AGENT_MODEL:-}"
+path = sys.argv[1]
+agent = os.environ.get("AGENT") or "unknown"
+model = os.environ.get("AGENT_MODEL") or ""
+name, email = {
+    "claude": ("Claude", "noreply@anthropic.com"),
+    "codex": ("Codex", "noreply@openai.com"),
+}.get(agent, (agent, "noreply@hpc-agents"))
 
-case "$AGENT" in
-    claude) AUTHOR="Claude";  EMAIL="noreply@anthropic.com" ;;
-    codex)  AUTHOR="Codex";   EMAIL="noreply@openai.com"    ;;
-    *)      AUTHOR="$AGENT";  EMAIL="noreply@hpc-agents"  ;;
-esac
+TRAILER = re.compile(r"^[A-Za-z][A-Za-z0-9-]*: \S")
+COAUTHOR = re.compile(r"^Co-Authored-By:", re.I)
 
+lines = open(path).read().rstrip("\n").split("\n")
 
-TRAILER="Co-Authored-By: ${AUTHOR} (${MODEL}) <${EMAIL}>"
+# Peel trailer paragraphs off the end (blank lines between them are tolerated and removed).
+trailers = []
+while lines:
+    while lines and not lines[-1].strip():
+        lines.pop()
+    i = len(lines)
+    while i > 0 and lines[i - 1].strip() and TRAILER.match(lines[i - 1]):
+        i -= 1
+    para = lines[i:]
+    if not para or i == 0 or lines[i - 1].strip():
+        break  # not a whole trailer paragraph, or it is the subject line
+    trailers = para + trailers
+    del lines[i:]
 
-# Skip if a co-author from this agent's vendor is already there: Claude Code adds its own
-# trailer naming the model that actually ran (AGENT_MODEL is only the launch default).
-# Also makes the hook idempotent.
-grep -qiE "^Co-Authored-By:.*<${EMAIL}>" "$COMMIT_MSG_FILE" && exit 0
+others = [t for t in trailers if not COAUTHOR.match(t)]
+coauthors, seen = [], set()
+for t in trailers:
+    if COAUTHOR.match(t):
+        m = re.search(r"<([^>]+)>", t)
+        key = m.group(1).strip().lower() if m else t.lower()
+        if key not in seen:
+            seen.add(key)
+            coauthors.append(t)
 
-# Git trailer convention: ensure a blank line before the trailer block
-if [[ -n "$(tail -1 "$COMMIT_MSG_FILE")" ]]; then
-    echo "" >> "$COMMIT_MSG_FILE"
-fi
+if email not in seen:
+    if agent == "claude":
+        sys.stderr.write(
+            "commit-msg: no Claude Co-Authored-By trailer, and the hook cannot know which model ran.\n"
+            "  Add one line naming your model as the last line of the message, e.g.\n"
+            "  'Co-Authored-By: Claude <model> <noreply@anthropic.com>', and commit again.\n")
+        sys.exit(1)
+    label = f"{name} ({model})" if model else name
+    coauthors.append(f"Co-Authored-By: {label} <{email}>")
 
-echo "$TRAILER" >> "$COMMIT_MSG_FILE"
+out = "\n".join(lines).rstrip("\n") + "\n\n" + "\n".join(others + coauthors) + "\n"
+open(path, "w").write(out)

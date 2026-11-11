@@ -96,9 +96,11 @@ allocation flags go in `hpc-agent-submit`.
   to an earlier session via `claude remote-control --continue` / `--session-id`; `inner.sh` and
   `claude-rc` add them to the usual `--name` + `--permission-mode` flags.
 - **No git credentials in the container**, by design. `container-env.sh` sets the commit identity
-  and points `core.hooksPath` at `config/git-hooks/`, whose `commit-msg` appends an agent
-  `Co-Authored-By` trailer unless one with the agent's email is already there (Claude Code adds
-  its own). `AGENT_MODEL` is passed only for headless runs, so the hook and `REPORT.md` never
+  and points `core.hooksPath` at `config/git-hooks/`, whose `commit-msg` (Python) keeps one
+  `Co-Authored-By` per vendor email (the first), moves all trailers into one block with
+  Co-Authored-By last, rejects a Claude commit without a Claude trailer (the hook can't know the
+  model), and appends one for Codex. `hpc-agent-run` also exports `GIT_AUTHOR_*`/`GIT_COMMITTER_*`
+  so a repo-local `user.name`/`user.email` can't override the identity. `AGENT_MODEL` is passed only for headless runs, so the hook and `REPORT.md` never
   name a model that a session didn't actually use. The user pushes from the host.
 - **The workspace is the starting directory**: `<workspace_dir>/<project>`, or any absolute
   `--workspace DIR` (requires `--project`, which then only names the session). Claude keys trust
