@@ -1,11 +1,12 @@
-# euler_agents
+# hpc_agents
 
 ![hpc_agents: start an agent on a compute node, let it work in a sandbox, follow it from your phone](docs/hpc_agents_overview.png)
 
 ## In a nutshell
 
-Run Claude Code on SLURM compute nodes. This fork is set up for UNIL's **Curnagl**; the ETH
-Euler setup it comes from is kept as a second [cluster profile](#cluster-profiles). The agent runs
+Run Claude Code on SLURM compute nodes. Tested on two clusters, each with its own
+[cluster profile](#cluster-profiles): **Euler** at ETH Zurich, where the project started, and
+**Curnagl** at the University of Lausanne (UNIL), which is the default profile. The agent runs
 inside a Singularity container — the
 container runtime available on HPC clusters — which isolates it from the host filesystem: it sees
 only the directories you explicitly mount, and it sees them **at their host paths**, so scripts,
@@ -67,8 +68,8 @@ and for the login step below.
 
 ```bash
 cd ~/src
-git clone https://github.com/alpae/euler_agents.git euler_agents
-cd euler_agents
+git clone https://github.com/juliabuhmann/hpc_agents.git hpc_agents
+cd hpc_agents
 make install   # symlinks CLIs to ~/.local/bin
 ```
 
@@ -117,7 +118,7 @@ One login covers everything: running the agent, and steering it from the browser
 Run this on a **login node** — it needs a terminal and network access:
 
 ```bash
-cd ~/src/euler_agents
+cd ~/src/hpc_agents
 bin/hpc-agent-run --claude-login
 ```
 
@@ -138,7 +139,7 @@ This is the default (`--auth login`). Two alternatives exist if you need them: a
 Check the image, the mounts and your credential in one go, on a login node:
 
 ```bash
-cd ~/src/euler_agents
+cd ~/src/hpc_agents
 bin/hpc-agent-run --agent claude --project harness-test --interactive
 ```
 
@@ -208,7 +209,7 @@ tmux new -s agent
 Curnagl, `eth_proxy` on Euler), so there is no `module load` step:
 
 ```bash
-cd /path/to/euler_agents
+cd /path/to/hpc_agents
 bin/hpc-agent-run --agent claude --project mywork --remote-control --interactive \
     --extra-bind      /path/to/writable/dir \
     --extra-read-bind /path/to/readonly/data
@@ -352,7 +353,7 @@ flags work with `--interactive`, where `claude-rc` then reattaches.
 starts immediately instead of giving you a shell:
 
 ```bash
-cd /path/to/euler_agents
+cd /path/to/hpc_agents
 bin/hpc-agent-run --remote-control --agent claude --project mywork --gpu
 ```
 
@@ -886,7 +887,7 @@ Authentication must happen inside the container so tokens are written to `home-c
 mounted as `$HOME` in every run. Once, on a login node:
 
 ```bash
-cd ~/src/euler_agents
+cd ~/src/hpc_agents
 module load singularityce        # Euler: module load eth_proxy
 singularity shell --cleanenv --containall \
     --home "$(pwd)/home-codex:/home" \
