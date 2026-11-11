@@ -46,6 +46,10 @@ before pointing one at data you care about.
 
 ## Setup (do once)
 
+> **Coming from `euler_agents`?** Follow [migration_briefing.md](migration_briefing.md), or point
+> your agent at it: it covers the renamed commands, the `"site": "euler"` setting and keeping
+> old sessions resumable.
+
 ### 1. Install Claude Code
 
 Check whether you already have it:
