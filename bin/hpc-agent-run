@@ -739,7 +739,8 @@ else:
     shutil.rmtree(launch, ignore_errors=True)
 PY
 }
-trap _sync_launch_sessions EXIT
+# Replaces host-config.sh's EXIT trap, so remove the merged-settings temp file here too.
+trap '_sync_launch_sessions; _cleanup_settings' EXIT
 
 # Claude prompts for per-directory workspace trust the first time it starts in a
 # directory (Remote Control has no bypass flag for it at all); trust is keyed by path

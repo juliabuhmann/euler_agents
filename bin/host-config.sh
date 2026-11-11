@@ -8,7 +8,10 @@
 # Defines _setting (expression over the settings, as s) and _site (over the site, as s).
 
 SETTINGS=$(mktemp)
-trap 'rm -f "$SETTINGS"' EXIT
+# A script that sets its own EXIT trap must call _cleanup_settings from it (bash keeps only
+# one EXIT trap; a new one replaces this).
+_cleanup_settings() { rm -f "$SETTINGS"; }
+trap _cleanup_settings EXIT
 python3 - "$REPO_DIR/config" "$SETTINGS" <<'PY'
 import json, os, sys
 cfg, out = sys.argv[1], sys.argv[2]
