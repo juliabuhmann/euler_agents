@@ -24,7 +24,8 @@ mkdir -p "${CONDA_PKGS_DIRS:-/tmp/conda_pkgs}"
 [[ -n "${XDG_CACHE_HOME:-}" ]]  && mkdir -p "$XDG_CACHE_HOME"
 [[ -n "${CUDA_CACHE_PATH:-}" ]] && mkdir -p "$CUDA_CACHE_PATH"
 
-# Git identity so `git commit` works, plus the commit-msg hook that appends the
+# Git identity so `git commit` works (hpc-agent-run also exports GIT_AUTHOR_*/GIT_COMMITTER_*,
+# which override repo-local config), plus the commit-msg hook that normalises the
 # Co-Authored-By trailer. No token is ever injected: the agent commits locally and
 # the user pushes from the host after the run.
 git config --global user.name  "${GIT_USER_NAME:-hpc-agent}"
