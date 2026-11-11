@@ -1,0 +1,15 @@
+{
+  "description": "ETH Euler: outbound network needs eth_proxy; GPU partition chosen by wall time",
+  "modules": ["eth_proxy"],
+  "container_cmd": "singularity",
+  "max_time": null,
+  "cpu_partition": null,
+  "gpu_partition": null,
+  "gpu_partitions_by_hours": {"4": "gpupr.4h", "24": "gpupr.24h", "120": "gpupr.120h"},
+  "gpu_request": "--gpus={type}1",
+  "default_gpu_type": "a100",
+  "gpu_mem_gres": true,
+  "gpu_sbatch_args": ["--tmp=50G"],
+  "mail_domain": "ethz.ch",
+  "presets": {}
+}

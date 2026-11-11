@@ -2,20 +2,20 @@
 # Host-side launcher: resolves config, sets up workspace and tmpdir, fires Singularity.
 # Called by slurm/run-agent.sh (inside a SLURM job) or directly for interactive use.
 #
-# Usage: euler-agent-run [--agent codex|claude] [--task "prompt"] [--task-file FILE]
+# Usage: hpc-agent-run [--agent codex|claude] [--task "prompt"] [--task-file FILE]
 #                        [--repo URL] [--model MODEL] [--project NAME] [--interactive]
 #                        [--max-budget-usd N] [--effort low|medium|high|xhigh|max]
 set -euo pipefail
 
 usage() {
     cat <<'EOF'
-euler-agent-run — set up workspace and launch an agent inside the Singularity container
+hpc-agent-run — set up workspace and launch an agent inside the Singularity container
 
 USAGE
-  euler-agent-run [OPTIONS]
+  hpc-agent-run [OPTIONS]
 
 Called automatically by SLURM via slurm/run-agent.sh. You can also invoke it
-directly on a compute node (e.g. after euler-agent-submit --interactive).
+directly on a compute node (e.g. after hpc-agent-submit --interactive).
 
 OPTIONS
   --agent  codex|claude       Agent to run (default: codex)
@@ -23,7 +23,7 @@ OPTIONS
   --task-file FILE            Read task from a file instead of --task
   --repo   URL                Git repo to clone into the workspace before running (public only:
                               the container holds no git credentials)
-  --model  MODEL              Model override (e.g. claude-sonnet-4-6, gpt-5.4)
+  --model  MODEL              Model override (e.g. opus, sonnet, claude-opus-5-5, gpt-5.4)
   --project NAME              Named workspace; persists and is reused across jobs.
                               May be nested to group related work: "shi/omicsMSA" lives at
                               <workspace_dir>/shi/omicsMSA. Segments: [A-Za-z0-9._-].
@@ -67,6 +67,12 @@ OPTIONS
                               do not apply (it runs on the stored OAuth login).
                               Combine with --interactive to get a container shell instead of
                               starting the session immediately, then run 'claude-rc' yourself.
+  --rc-continue               With --remote-control: reattach to the Remote Control session last
+                              recorded for the workspace instead of starting a new one
+                              ('claude remote-control --continue'; only works within roughly
+                              4 hours of that session).
+  --rc-session-id ID          With --remote-control: reattach to a specific Remote Control session
+                              by ID ('claude remote-control --session-id ID').
   -h, --help                  Show this help
 
 Task resolution order (highest priority first):
@@ -77,14 +83,14 @@ Task resolution order (highest priority first):
 
 EXAMPLES
   # Run claude on a task (on a compute node or in an existing SLURM job)
-  euler-agent-run --agent claude --task "Write unit tests for src/utils.py" \
+  hpc-agent-run --agent claude --task "Write unit tests for src/utils.py" \
       --project myproject --max-budget-usd 5
 
   # Interactive shell inside the Singularity container
-  euler-agent-run --agent codex --project myproject --interactive
+  hpc-agent-run --agent codex --project myproject --interactive
 
   # Provide a reference dataset inside the container (read-only, same path as on the host)
-  euler-agent-run --agent claude --project myproject \
+  hpc-agent-run --agent claude --project myproject \
       --ref /cluster/project/beltrao/shared/data \
       --task "Analyse the CSV files in /cluster/project/beltrao/shared/data and write a summary."
 
@@ -98,6 +104,8 @@ PATHS INSIDE THE CONTAINER
 CONFIGURATION
   config/settings.json   Image path, workspace dir, host tool dirs, git identity, per-agent
                          model/budget defaults. Override in config/settings.local.json.
+  config/sites/*.json    Cluster profile picked by "site" in settings: modules to load,
+                         container command, partitions, time limit.
   config/task.json       Default task used when no --task / --task-file given
   config/secrets.env     API keys (gitignored, sourced automatically)
 EOF
@@ -105,25 +113,12 @@ EOF
 
 SCRIPT_PATH=$(realpath "$0")
 REPO_DIR=$(dirname "$(dirname "$SCRIPT_PATH")")
-SETTINGS="$REPO_DIR/config/settings.json"
-
-SETTINGS_LOCAL="$REPO_DIR/config/settings.local.json"
-if [[ -f "$SETTINGS_LOCAL" ]]; then
-    _TMP=$(mktemp)
-    python3 -c "
-import json
-s = json.load(open('$SETTINGS'))
-s.update(json.load(open('$SETTINGS_LOCAL')))
-json.dump(s, open('$_TMP', 'w'))
-"
-    SETTINGS="$_TMP"
-fi
-
-_setting() {
-    python3 -c "import json; s=json.load(open('$SETTINGS')); print($1)"
-}
+# Merged settings + cluster profile (config/sites/<site>.json); defines _setting and _site.
+source "$REPO_DIR/bin/host-config.sh"
 
 WORKSPACE_DIR=$(_setting "s['workspace_dir']")
+CONTAINER_CMD=$(_site "s.get('container_cmd') or 'singularity'")
+MAIL_DOMAIN=$(_site "s.get('mail_domain') or ''")
 IMAGE_PATH=$(_setting "s['image_path']")
 LOGS_DIR=$(_setting "s.get('logs_dir', s['workspace_dir'] + '/logs')")
 
@@ -137,8 +132,8 @@ HOST_CACHE_DIR=$(_setting "s.get('cache_dir') or ''")
 AGENT_HOME_DIR=$(_setting "s.get('agent_home_dir') or ''")
 # Commit identity for the agent. An identity, not a credential: no push token exists in
 # the container; the user pushes from the host after the run.
-GIT_USER_NAME=$(_setting "s.get('git_user_name') or 'euler-agent'")
-GIT_USER_EMAIL=$(_setting "s.get('git_user_email') or 'euler-agent@noreply.invalid'")
+GIT_USER_NAME=$(_setting "s.get('git_user_name') or 'hpc-agent'")
+GIT_USER_EMAIL=$(_setting "s.get('git_user_email') or 'hpc-agent@noreply.invalid'")
 
 # Parse args
 AGENT="codex"
@@ -159,6 +154,8 @@ INTERACTIVE=false
 GPU=false
 NOTIFY_SUCCESS_OVERRIDE=""
 REMOTE_CONTROL=false
+RC_CONTINUE=false
+RC_SESSION_ID=""
 CLAUDE_LOGIN=false
 
 while [[ $# -gt 0 ]]; do
@@ -179,9 +176,11 @@ while [[ $# -gt 0 ]]; do
         --extra-read-bind)   EXTRA_READ_BINDS+=("$2"); shift 2 ;;
         --binds-file)        BIND_FILES+=("$2");       shift 2 ;;
         --remote-control)    REMOTE_CONTROL=true;      shift ;;
+        --rc-continue)       RC_CONTINUE=true;         shift ;;
+        --rc-session-id)     RC_SESSION_ID="$2";       shift 2 ;;
         --claude-login)      CLAUDE_LOGIN=true;        shift ;;
         --gpu)               GPU=true;                 shift ;;
-        --gpu-type)          shift 2 ;;  # consumed by euler-agent-submit, ignored here
+        --gpu-type)          shift 2 ;;  # consumed by hpc-agent-submit, ignored here
         --interactive)       INTERACTIVE=true;         shift ;;
         --notify-success)    NOTIFY_SUCCESS_OVERRIDE="true";  shift ;;
         --no-notify-success) NOTIFY_SUCCESS_OVERRIDE="false"; shift ;;
@@ -201,6 +200,14 @@ case "$MODEL" in
         exit 1 ;;
 esac
 
+# Site modules first: on some clusters the container runtime itself is a module.
+_load_site_modules
+if ! command -v "$CONTAINER_CMD" >/dev/null 2>&1; then
+    echo "ERROR: container command '$CONTAINER_CMD' not found (site '$(_site "s['name']")')." >&2
+    echo "       Check \"modules\" and \"container_cmd\" in config/sites/$(_site "s['name']").json." >&2
+    exit 1
+fi
+
 # One-time interactive OAuth login for Claude Remote Control.
 # Remote Control requires a full-scope claude.ai login token (API keys and the
 # inference-only `claude setup-token` are both rejected). We run `claude auth login`
@@ -213,14 +220,14 @@ if [[ "$CLAUDE_LOGIN" == true ]]; then
     echo "Launching 'claude auth login' inside the container."
     echo "  Credentials persist in: $SOURCE_HOME  (gitignored)"
     echo "  Choose your claude.ai account (NOT an API key) when prompted."
-    singularity exec \
+    "$CONTAINER_CMD" exec \
         --cleanenv --containall \
         --home "$SOURCE_HOME:/home" \
         --env "PATH=/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
         "$IMAGE_PATH" \
         bash -lc 'export HOME=/home; cd /home; claude auth login && echo && claude auth status'
     echo "If login succeeded, launch a steerable session with:"
-    echo "  euler-agent-submit --agent claude --remote-control --project NAME --time 8:00:00"
+    echo "  hpc-agent-submit --agent claude --remote-control --project NAME --time 8:00:00"
     exit 0
 fi
 
@@ -273,6 +280,16 @@ if [[ "$REMOTE_CONTROL" == true ]]; then
     [[ "$AGENT" == claude ]] || { echo "ERROR: --remote-control is claude-only." >&2; exit 1; }
     [[ -n "$PROJECT"      ]] || { echo "ERROR: --remote-control requires --project (it names the Remote Control session)." >&2; exit 1; }
 fi
+# Reattaching to an earlier Remote Control session: the CLI rejects --continue together
+# with --session-id, so catch that (and use without --remote-control) here, with the flag names.
+if [[ "$RC_CONTINUE" == true || -n "$RC_SESSION_ID" ]]; then
+    [[ "$REMOTE_CONTROL" == true ]] || { echo "ERROR: --rc-continue / --rc-session-id need --remote-control." >&2; exit 1; }
+    [[ "$RC_CONTINUE" == true && -n "$RC_SESSION_ID" ]] && { echo "ERROR: use either --rc-continue or --rc-session-id, not both." >&2; exit 1; }
+    if [[ -n "$RC_SESSION_ID" && ! "$RC_SESSION_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        echo "ERROR: --rc-session-id takes a session ID (letters, digits, '_', '-'), got '$RC_SESSION_ID'." >&2
+        exit 1
+    fi
+fi
 
 # Load API credentials (secrets.env is the template; secrets.local.env holds real values)
 SECRETS="$REPO_DIR/config/secrets.env"
@@ -320,10 +337,10 @@ fi
 mkdir -p "$RUN_WORKSPACE"
 
 # Set up a per-LAUNCH tmpdir (becomes /tmp inside the container). Keyed on the PID as
-# well as the job id: on a held node every euler-agent-run shares one SLURM_JOB_ID, and
+# well as the job id: on a held node every hpc-agent-run shares one SLURM_JOB_ID, and
 # a shared tmpdir made the second launch reuse the first launch's home copy — with its
 # stale login — instead of re-seeding from home-<agent>/.
-JOB_TMPDIR="${TMPDIR:-/tmp}/euler-agents.${SLURM_JOB_ID:-nojob}.$$"
+JOB_TMPDIR="${TMPDIR:-/tmp}/hpc-agents.${SLURM_JOB_ID:-nojob}.$$"
 mkdir -p "$JOB_TMPDIR/scratch"
 
 # Write task to job-specific scratch (not workspace) to avoid races on parallel jobs
@@ -341,28 +358,46 @@ SOURCE_HOME="${AGENT_HOME_DIR:-$REPO_DIR}/home-${AGENT}"
 mkdir -p "$SOURCE_HOME/.claude"
 JOB_HOME="$SOURCE_HOME"
 
-# The agent inherits the user's global ~/.claude/CLAUDE.md. The host home is never bound,
-# so a symlink would dangle inside the container; keep a real copy instead, refreshed on
-# every launch so edits to the global file propagate.
+# The agent's user-level CLAUDE.md (/home/.claude/CLAUDE.md inside): the user's global
+# ~/.claude/CLAUDE.md, then an import of this launch's /tmp/agent-briefing.md (written
+# below). The host home is never bound, so a symlink would dangle inside the container;
+# keep a real copy, rebuilt on every launch so edits to the global file propagate. The
+# file is shared by every container, but /tmp is per launch, so the same import line
+# resolves to each container's own briefing and mount table. Written to a temp file and
+# renamed, so a container starting at the same moment never reads a half-written file.
 _global_claude_md="$HOME/.claude/CLAUDE.md"
-if [[ -f "$_global_claude_md" ]]; then
-    rm -f "$JOB_HOME/.claude/CLAUDE.md"
-    cp "$_global_claude_md" "$JOB_HOME/.claude/CLAUDE.md"
-fi
+_agent_claude_md="$JOB_HOME/.claude/CLAUDE.md"
+_tmp_claude_md=$(mktemp "$JOB_HOME/.claude/.CLAUDE.md.XXXXXX")
+{
+    [[ -f "$_global_claude_md" ]] && { cat "$_global_claude_md"; printf '\n'; }
+    if [[ "$AGENT" == claude ]]; then
+        printf '# Container environment (added by hpc-agent-run)\n\n'
+        printf 'This session runs inside the hpc-agents container. The briefing below describes the\n'
+        printf 'environment and the exact mounts of this launch:\n\n'
+        printf '@/tmp/agent-briefing.md\n'
+    fi
+} > "$_tmp_claude_md"
+mv -f "$_tmp_claude_md" "$_agent_claude_md"
 
 echo "Agent home: $JOB_HOME  (persistent, shared by all containers)"
 echo "Workspace: $RUN_WORKSPACE  (same path inside the container)"
 echo "Agent:     $AGENT"
 echo "Image:     $IMAGE_PATH"
 
+# The model is only decided here for headless runs (inner.sh passes --model). Interactive
+# and Remote Control sessions pick it in the session, so pass none rather than a setting
+# that may not be what ran; REPORT.md and the commit-msg hook read AGENT_MODEL.
+RUN_MODEL="${MODEL:-}"
+[[ "$INTERACTIVE" == true || "$REMOTE_CONTROL" == true ]] && RUN_MODEL=""
+
 # Build --env args for singularity
 SING_ENV=(
     --env "AGENT=$AGENT"
     --env "REPO_URL=${REPO_URL:-}"
-    --env "AGENT_MODEL=${MODEL:-}"
+    --env "AGENT_MODEL=$RUN_MODEL"
     --env "AGENT_MAX_BUDGET_USD=${MAX_BUDGET_USD:-}"
     --env "AGENT_EFFORT=${AGENT_EFFORT:-}"
-    --env "EULER_AGENTS_DIR=$REPO_DIR"
+    --env "HPC_AGENTS_DIR=$REPO_DIR"
     --env "AGENT_WORKSPACE=$RUN_WORKSPACE"
     --env "GIT_USER_NAME=$GIT_USER_NAME"
     --env "GIT_USER_EMAIL=$GIT_USER_EMAIL"
@@ -393,11 +428,11 @@ fi
 #   apikey       — inject ANTHROPIC_API_KEY (pay-per-use, accurate cost reporting).
 if [[ "$REMOTE_CONTROL" == true ]]; then
     # Inject no credential: Remote Control uses the full-scope OAuth login stored in
-    # the persistent home (from `euler-agent-run --claude-login`). An injected
+    # the persistent home (from `hpc-agent-run --claude-login`). An injected
     # ANTHROPIC_API_KEY or inference-only token would be rejected by Remote Control.
     if [[ ! -f "$JOB_HOME/.claude/.credentials.json" ]]; then
         echo "WARNING: no OAuth credentials found in $JOB_HOME/.claude/.credentials.json." >&2
-        echo "         Remote Control will fail to start. Run 'euler-agent-run --claude-login' first." >&2
+        echo "         Remote Control will fail to start. Run 'hpc-agent-run --claude-login' first." >&2
     fi
     echo "Auth:      Claude subscription (full-scope OAuth from the agent home)"
 elif [[ "$AGENT" == claude && "$AUTH_MODE" == login ]]; then
@@ -408,7 +443,7 @@ elif [[ "$AGENT" == claude && "$AUTH_MODE" == login ]]; then
     if [[ ! -f "$JOB_HOME/.claude/.credentials.json" ]]; then
         echo "ERROR: --auth login needs a stored claude.ai login, and none was found in" >&2
         echo "       $SOURCE_HOME/.claude/.credentials.json" >&2
-        echo "       Run 'bin/euler-agent-run --claude-login' on a login node first." >&2
+        echo "       Run 'bin/hpc-agent-run --claude-login' on a login node first." >&2
         exit 1
     fi
     echo "Auth:      Claude subscription (stored claude.ai login)"
@@ -434,8 +469,12 @@ fi
 if [[ "$REMOTE_CONTROL" == true ]]; then
     SING_ENV+=(
         --env "REMOTE_CONTROL=true"
-        --env "RC_SESSION_NAME=euler-rc-${PROJECT_SLUG}-${SLURM_JOB_ID:-interactive}"
+        --env "RC_SESSION_NAME=hpc-rc-${PROJECT_SLUG}-${SLURM_JOB_ID:-interactive}"
+        --env "RC_CONTINUE=$RC_CONTINUE"
+        --env "RC_SESSION_ID=$RC_SESSION_ID"
     )
+    [[ "$RC_CONTINUE" == true ]] && echo "Remote:    reattach to the last Remote Control session of the workspace"
+    [[ -n "$RC_SESSION_ID" ]]    && echo "Remote:    reattach to Remote Control session $RC_SESSION_ID"
 fi
 
 # Identity binds: every host directory appears at its own path inside the container, so
@@ -585,10 +624,11 @@ done
 
 # Per-session briefing for the agent: the generic text from config/agent-briefing.md
 # plus the actual mount table of this run. Lands in the job scratch, i.e. at
-# /tmp/agent-briefing.md inside the container, where an interactive user can paste it
-# or start with `claude "$(cat /tmp/agent-briefing.md)"`.
+# /tmp/agent-briefing.md inside the container, which the agent home's CLAUDE.md imports
+# (see above), so Claude loads it in every session without the user passing it.
 {
     cat "$REPO_DIR/config/agent-briefing.md"
+    printf '\n## This cluster\n\n%s: %s\n' "$(_site "s['name']")" "$(_site "s.get('description', '')")"
     printf '\n## Mounts in this session\n\n'
     printf 'Workspace and starting directory: `%s`\n\n' "$RUN_WORKSPACE"
     printf '| Path inside = on the host | Mode |\n|---|---|\n'
@@ -600,6 +640,34 @@ done
     done
     printf '| `/home` | rw, private agent home (`~`), not the user'"'"'s home |\n'
     printf '| `/tmp` | rw, node-local scratch, gone after the job |\n'
+    # When the job is killed. Only inside a SLURM job (not on a login node, nor in a shell
+    # that reached a held node by plain ssh). SLURM_JOB_END_TIME (epoch) where SLURM sets
+    # it, else squeue; an extension granted later is not reflected.
+    _end_epoch=""
+    if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+        if [[ "${SLURM_JOB_END_TIME:-}" =~ ^[0-9]+$ ]]; then
+            _end_epoch=$SLURM_JOB_END_TIME
+        else
+            _end=$(squeue -h -j "$SLURM_JOB_ID" -o %e 2>/dev/null || true)
+            [[ "$_end" =~ ^[0-9]{4}- ]] && _end_epoch=$(date -d "$_end" +%s 2>/dev/null || true)
+        fi
+    fi
+    if [[ -n "$_end_epoch" ]]; then
+        # Wrap-up margin: 10% of the time left at launch, clamped to 3–30 min, so a short
+        # job is not in wrap-up mode from the start.
+        _wrap=$(( (_end_epoch - $(date +%s)) / 600 ))
+        (( _wrap < 3 )) && _wrap=3
+        (( _wrap > 30 )) && _wrap=30
+        printf '\n## Time limit\n\n'
+        printf 'This session runs in SLURM job %s, which is killed at **%s** (%s).\n' \
+            "$SLURM_JOB_ID" "$(date -d "@$_end_epoch" '+%Y-%m-%d %H:%M %Z')" \
+            "$(date -u -d "@$_end_epoch" '+%Y-%m-%d %H:%M UTC')"
+        printf 'You have no clock of your own: check the remaining time before long steps with\n\n'
+        printf '    echo $(( (%s - $(date +%%s)) / 60 )) minutes left\n\n' "$_end_epoch"
+        printf 'Do not start a step that cannot finish in the remaining time; split or checkpoint it\n'
+        printf 'instead. In the last %d minutes, start nothing new: commit, write the current state\n' "$_wrap"
+        printf 'and next steps to the workspace, and tell the user. Until then, work normally.\n'
+    fi
 } > "$JOB_TMPDIR/scratch/agent-briefing.md"
 
 # Share Claude sessions with the host, per directory. Claude keeps transcripts (and
@@ -709,7 +777,7 @@ if [[ "$INTERACTIVE" == true ]]; then
     # no way to load an rcfile: bin/claude-shellrc is what makes the bare `claude`
     # and `codex` commands skip permission prompts, matching bin/inner.sh.
     # The repo is bound at its host path, so the rcfile is addressed by $REPO_DIR.
-    singularity exec \
+    "$CONTAINER_CMD" exec \
         --cleanenv --containall \
         --pwd "$RUN_WORKSPACE" \
         "${NV_FLAG[@]+"${NV_FLAG[@]}"}" \
@@ -719,7 +787,7 @@ if [[ "$INTERACTIVE" == true ]]; then
         bash --rcfile "$REPO_DIR/bin/claude-shellrc" -i
 else
     AGENT_EXIT=0
-    singularity exec \
+    "$CONTAINER_CMD" exec \
         --cleanenv --containall \
         --pwd "$RUN_WORKSPACE" \
         "${NV_FLAG[@]+"${NV_FLAG[@]}"}" \
@@ -739,6 +807,7 @@ else
     NOTIFY_ON_FAILURE="$NOTIFY_ON_FAILURE" \
     NOTIFY_ON_SUCCESS="$NOTIFY_ON_SUCCESS" \
     LOGS_DIR="$LOGS_DIR" \
+    MAIL_DOMAIN="$MAIL_DOMAIN" \
     "$REPO_DIR/bin/notify.sh" \
         --exit-code "$AGENT_EXIT" \
         --workspace "$RUN_WORKSPACE" \

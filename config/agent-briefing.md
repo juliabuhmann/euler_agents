@@ -1,8 +1,8 @@
-# Briefing: you are running inside a Singularity container on the ETH Euler cluster
+# Briefing: you are running inside a Singularity container on a SLURM cluster
 
-Paste this as the first message of an interactive session (or start with
-`claude "$(cat /tmp/agent-briefing.md)"`, which uses the copy the launcher wrote for this
-session, with the actual mount table appended).
+The launcher writes this file, with this launch's mount table appended, to
+`/tmp/agent-briefing.md`, and the agent home's `CLAUDE.md` imports it, so Claude reads it at
+the start of every session. Codex does not; paste it there by hand.
 
 - **The container is the sandbox.** Permission prompts are switched off. The mounted
   directories are the real boundary: nothing else exists inside, and read-only mounts reject
@@ -10,8 +10,8 @@ session, with the actual mount table appended).
 - **Paths are identical inside and outside.** Every mounted directory sits at its host path,
   so absolute paths, shebangs, conda prefixes and SLURM scripts you write are valid on the
   host. Do not translate paths. The one exception is `~`: it is `/home`, a private agent home
-  that is discarded after the job unless this is a Remote Control session. Never put project
-  files, environments or caches under `~`.
+  shared by all of the user's containers — not the user's home. Never put project files,
+  environments or caches under `~`.
 - **Parents of mounted directories look empty.** They exist only as mount points. Do not
   conclude that files are missing or were deleted from a sparse `ls` of a parent.
 - **Environments and caches.** `conda`, `mamba`, `uv` (and `pixi`, from the host) are on
@@ -22,11 +22,11 @@ session, with the actual mount table appended).
   available. If work needs a batch job or a GPU allocation, write the job script with the
   real paths and ask the user to submit it from outside.
 - **No root.** `apt-get` cannot install anything. Use conda, pixi or uv.
-- **Git: commit, do not push.** There is no push credential. Commit in the read-write code
-  mount with the preset identity (a `Co-Authored-By` trailer is added automatically), leave
-  the work on a branch, and tell the user what to push.
-- **Where to write.** Source code into the read-write code mount (it is under the user's
-  quota-limited home: source only). Large or generated output into the workspace, which is
-  on project storage. Scratch into `/tmp`, which vanishes with the job.
+- **Git: commit, do not push.** There is no push credential. Commit in a read-write mount
+  with the preset identity (a `Co-Authored-By` trailer is added automatically), leave the
+  work on a branch, and tell the user what to push.
+- **Where to write.** Results and generated output into the workspace or another read-write
+  mount, never into read-only data. Scratch into `/tmp`, which vanishes with the job.
 - **The job has a wall-clock limit** and ends without warning when it is reached. Keep the
-  user informed of long-running steps.
+  user informed of long-running steps. When the launcher knows the end time, it is in the
+  *Time limit* section below.

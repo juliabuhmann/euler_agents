@@ -1,18 +1,13 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=euler-agent
-#SBATCH --time=4:00:00
-#SBATCH --mem-per-cpu=8G
-#SBATCH --cpus-per-task=2
-#SBATCH --output=/cluster/project/beltrao/jbuhmann/agentic_ai/logs/slurm-%j.out
-#SBATCH --error=/cluster/project/beltrao/jbuhmann/agentic_ai/logs/slurm-%j.err
+#SBATCH --job-name=hpc-agent
 #
 # Usage: sbatch slurm/run-agent.sh [--agent codex|claude] [--task "..."] [--repo URL] [--model MODEL]
-# Prefer using euler-agent-submit which sets --output/--error from config/settings.json.
+# Submit via hpc-agent-submit, which sets resources, partition and --output/--error from
+# config/settings.json and the site profile. Site modules (a proxy, the container runtime)
+# are loaded by hpc-agent-run, so this script stays cluster-neutral.
 set -euo pipefail
 
-module load eth_proxy
-
-REPO_DIR="${EULER_AGENTS_DIR:?EULER_AGENTS_DIR not set — submit via euler-agent-submit}"
+REPO_DIR="${HPC_AGENTS_DIR:?HPC_AGENTS_DIR not set — submit via hpc-agent-submit}"
 
 echo "SLURM job $SLURM_JOB_ID on $(hostname)"
-exec "$REPO_DIR/bin/euler-agent-run" "$@"
+exec "$REPO_DIR/bin/hpc-agent-run" "$@"

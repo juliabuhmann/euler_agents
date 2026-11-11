@@ -2,7 +2,9 @@
 
 ## In a nutshell
 
-Run Claude Code on Euler compute nodes. The agent runs inside a Singularity container — the
+Run Claude Code on SLURM compute nodes. This fork is set up for UNIL's **Curnagl**; the ETH
+Euler setup it comes from is kept as a second [cluster profile](#cluster-profiles). The agent runs
+inside a Singularity container — the
 container runtime available on HPC clusters — which isolates it from the host filesystem: it sees
 only the directories you explicitly mount, and it sees them **at their host paths**, so scripts,
 job files and conda environments the agent produces run unchanged outside the container.
@@ -18,7 +20,7 @@ read-only. Work alongside it in the terminal, or optionally hand the session to
 
 ```bash
 # on a node you hold, inside tmux — see the section for the node allocation
-bin/euler-agent-run --agent claude --project mywork --remote-control --interactive \
+bin/hpc-agent-run --agent claude --project mywork --remote-control --interactive \
     --extra-bind      /path/to/writable/dir \
     --extra-read-bind /path/to/readonly/data
 # then inside the container:   cd /path/to/writable/dir && claude-rc
@@ -29,7 +31,7 @@ front, SLURM runs it unattended, and you read the output when it finishes. Best 
 well defined.
 
 ```bash
-euler-agent-submit --agent claude --project my-analysis \
+hpc-agent-submit --agent claude --project my-analysis \
     --task "Explore the CSV files in data/, fit a linear regression, write findings to results/report.md"
 ```
 
@@ -63,10 +65,13 @@ and for the login step below.
 
 ```bash
 cd ~/src
-git clone <repo-url> euler_agents
+git clone https://github.com/alpae/euler_agents.git euler_agents
 cd euler_agents
 make install   # symlinks CLIs to ~/.local/bin
 ```
+
+> The commands used to be called `euler-agent-run` / `euler-agent-submit`. After pulling the
+> rename, run `make install` again: it links the new `hpc-agent-*` names and removes the old links.
 
 Add `~/.local/bin` to your PATH if it isn't already (add to `~/.bashrc`):
 
@@ -75,28 +80,34 @@ export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Create `config/settings.local.json` with your own paths (gitignored, merges over
-`settings.json`):
+`settings.json`). `"site"` picks the cluster profile and defaults to `curnagl`:
 
 ```json
 {
-  "workspace_dir": "/cluster/work/<group>/<username>/agentic_ai/workspaces",
-  "logs_dir":      "/cluster/project/<group>/<username>/logs",
-  "image_path":    "/cluster/project/beltrao/jbuhmann/agentic_ai/images/euler-agents.sif"
+  "site":          "curnagl",
+  "workspace_dir": "/scratch/<username>/agentic_ai/workspaces",
+  "logs_dir":      "/scratch/<username>/agentic_ai/logs",
+  "image_path":    "/work/FAC/<faculty>/<department>/<pi>/<project>/agentic_ai/images/hpc-agents-YYYYMMDD.sif"
 }
 ```
 
 ```bash
-mkdir -p /cluster/work/<group>/<username>/agentic_ai/workspaces /cluster/project/<group>/<username>/logs
+mkdir -p /scratch/$USER/agentic_ai/workspaces /scratch/$USER/agentic_ai/logs
 ```
+
+Any path works for `workspace_dir` as long as it is the same on every node and survives
+between jobs: Claude files sessions and memory under the absolute working directory, so a
+path that changes per job (node-local `$TMPDIR`) loses them. A shared scratch is fine, but
+check its purge policy and keep code in git — or put the workspace under `/work`.
 
 > The merge is shallow: a top-level key in `settings.local.json` replaces the whole block from
 > `settings.json`. If you override part of `"slurm"` or `"claude"`, restate every key in it.
 
 ### 3. Singularity image
 
-A pre-built image is at `/cluster/project/beltrao/jbuhmann/agentic_ai/images/euler-agents.sif` —
-no action needed unless you are rebuilding it. See
-[rebuilding the image](#rebuilding-the-image).
+Build one on a Curnagl login node and point `image_path` at it — see
+[rebuilding the image](#rebuilding-the-image). (On Euler, a pre-built image is at
+`/cluster/project/beltrao/jbuhmann/agentic_ai/images/euler-agents-20261001.sif`.)
 
 ### 4. Log in to your claude.ai account
 
@@ -105,7 +116,7 @@ Run this on a **login node** — it needs a terminal and network access:
 
 ```bash
 cd ~/src/euler_agents
-bin/euler-agent-run --claude-login
+bin/hpc-agent-run --claude-login
 ```
 
 Pick your **claude.ai account**, not an API key. This runs `claude auth login` inside the
@@ -126,10 +137,10 @@ Check the image, the mounts and your credential in one go, on a login node:
 
 ```bash
 cd ~/src/euler_agents
-bin/euler-agent-run --agent claude --project harness-test --interactive
+bin/hpc-agent-run --agent claude --project harness-test --interactive
 ```
 
-Inside the container you should land at a `(euler-agents) <workspace_dir>/<project> $` prompt. Then:
+Inside the container you should land at a `(hpc-agents) <workspace_dir>/<project> $` prompt. Then:
 
 ```bash
 claude --version
@@ -155,31 +166,32 @@ you can check in from your phone and put it down again.
 the agent will do; the wall time also bounds how long the session lives.
 
 *CPU only*, with generous cores and memory (16 × 8 GB = 128 GB here) for data wrangling and
-analysis. Leave the partition to SLURM, which picks one from the requested time:
+analysis. Curnagl caps every job at 3 days:
 
 ```bash
-sbatch --time=1-00:00:00 \
-    --cpus-per-task=16 --mem-per-cpu=8G --tmp=100G \
+sbatch -p cpu --time=1-00:00:00 \
+    --cpus-per-task=16 --mem-per-cpu=8G \
     --job-name=agent-node --wrap="sleep infinity"
 ```
 
-*With a GPU*, when the agent needs to train or run inference. Here the partition family depends
-on the card — see [GPUs, partitions and Slurm accounts](#gpus-partitions-and-slurm-accounts):
+*With a GPU*, when the agent needs to train or run inference:
 
 ```bash
-sbatch -p cuda13pr.120h --time=5-00:00:00 \
-    --gpus=nvidia_rtx_pro_6000:1 --gres=gpumem:96g \
-    --cpus-per-task=4 --mem-per-cpu=8G --tmp=100G \
+sbatch -p gpu --gres=gpu:1 --time=1-00:00:00 \
+    --cpus-per-task=4 --mem-per-cpu=8G \
     --job-name=agent-node --wrap="sleep infinity"
 ```
+
+On Euler the partition and GPU request look different — see
+[Euler: GPUs, partitions and Slurm accounts](#euler-gpus-partitions-and-slurm-accounts).
 
 An idle GPU reservation still holds the card, so prefer the CPU node unless the agent needs one.
 
 **2. Find the node and SSH in** (once the job shows `R` / RUNNING):
 
 ```bash
-squeue --me                 # note JOBID and NODELIST (e.g. eu-g5-042)
-ssh <nodename>              # Euler allows SSH to nodes you hold an allocation on
+squeue --me                 # note JOBID and NODELIST
+ssh <nodename>              # where the cluster allows SSH to nodes you hold an allocation on
 # fallback if SSH to the node is blocked:  srun --jobid=<jobid> --pty bash
 ```
 
@@ -189,12 +201,13 @@ ssh <nodename>              # Euler allows SSH to nodes you hold an allocation o
 tmux new -s agent
 ```
 
-**4. Start the container with the directories you want mounted.** Use `euler-agent-run`, *not*
-`submit` — you already hold the node:
+**4. Start the container with the directories you want mounted.** Use `hpc-agent-run`, *not*
+`submit` — you already hold the node. It loads the site's modules itself (`singularityce` on
+Curnagl, `eth_proxy` on Euler), so there is no `module load` step:
 
 ```bash
 cd /path/to/euler_agents
-bin/euler-agent-run --agent claude --project mywork --remote-control --interactive \
+bin/hpc-agent-run --agent claude --project mywork --remote-control --interactive \
     --extra-bind      /path/to/writable/dir \
     --extra-read-bind /path/to/readonly/data
 ```
@@ -211,12 +224,12 @@ claude-rc                  # steerable session, permission prompts already disab
 ```
 
 Detach from tmux with `Ctrl-b d`. To reconnect after a disconnect, SSH back to the **same** node
-and `tmux attach -t agent`. Find the session by name (`euler-rc-<project>-<jobid>`) in the app.
+and `tmux attach -t agent`. Find the session by name (`hpc-rc-<project>-<jobid>`) in the app.
 
 `claude-rc` is a helper from `bin/claude-shellrc`; it runs `claude remote-control` with a session
 name and `--permission-mode bypassPermissions`. What `--remote-control` changes:
 
-- `--project` becomes **required**; it names the session (`euler-rc-<project>-<jobid>`).
+- `--project` becomes **required**; it names the session (`hpc-rc-<project>-<jobid>`).
 - Workspace trust is pre-accepted for the workspace and every bind, because
   `claude remote-control` prompts for it and has no bypass flag.
 - It accepts **only** the stored claude.ai login from Setup step 4 — a `setup-token` or API key
@@ -226,7 +239,7 @@ name and `--permission-mode bypassPermissions`. What `--remote-control` changes:
 The session dies when the SLURM job ends, so size the allocation in step 1 accordingly.
 
 **If the login was revoked or you switched accounts**, `claude-rc` fails with a 401. Re-run
-`bin/euler-agent-run --claude-login` (delete `home-claude/.claude/.credentials.json` first if it
+`bin/hpc-agent-run --claude-login` (delete `home-claude/.claude/.credentials.json` first if it
 refuses because a login already exists). All containers share that one home, so the new login is
 live for every project at once; a container that is already running needs `claude auth login`
 inside instead.
@@ -241,18 +254,18 @@ Two flags, both repeatable, so any number of directories can be added in either 
 | `--extra-read-bind SRC` | read-only | the agent can read but not modify; an explicit `:rw` is rejected rather than silently downgraded |
 
 A repository can carry its own list instead, so you stop retyping it: put a file such as
-`euler-agents.binds` in the repo (start from `config/binds.example`) and pass it with
+`hpc-agents.binds` in the repo (start from `config/binds.example`) and pass it with
 `--binds-file`, in either use case:
 
 ```
-# euler-agents.binds — one SRC[:DEST][:ro|rw] per line, mode defaults to ro
+# hpc-agents.binds — one SRC[:DEST][:ro|rw] per line, mode defaults to ro
 .:rw                                              # this repo, read-write
-/cluster/project/<group>/<user>/mydata:ro         # input data
+/work/<project_dir>/mydata:ro                     # input data
 ```
 
 ```bash
-bin/euler-agent-run --agent claude --project mywork --interactive \
-    --binds-file ~/src/myrepo/euler-agents.binds
+bin/hpc-agent-run --agent claude --project mywork --interactive \
+    --binds-file ~/src/myrepo/hpc-agents.binds
 ```
 
 Relative entries resolve against the file's directory, so `.` is the repo itself. A flag for
@@ -281,7 +294,7 @@ The host `$HOME` is never mounted and only `/etc/localtime` and `/etc/hosts` are
 the blast radius is exactly the table above. That is what makes it reasonable to run with
 permission prompts bypassed: `bin/claude-shellrc` wraps `claude` and `codex` so the bare commands
 skip them. A bound directory's *parents* exist inside only as empty mount points, so listing
-`/cluster/project` shows just the pieces that were bound.
+`/work` shows just the pieces that were bound.
 
 ### Terminal only, without steering
 
@@ -289,7 +302,7 @@ Drop `--remote-control` and the session stays entirely in your terminal — no c
 Everything else is the same, and you start the agent with plain `claude` instead of `claude-rc`:
 
 ```bash
-bin/euler-agent-run --agent claude --project mywork --interactive \
+bin/hpc-agent-run --agent claude --project mywork --interactive \
     --extra-bind      /path/to/writable/dir \
     --extra-read-bind /path/to/readonly/data
 # inside the container:
@@ -306,19 +319,39 @@ and the model and effort flags apply as normal. Transcripts persist either way (
 **Fire-and-forget via SLURM.** No node to hold, no tmux — SLURM allocates and starts the session:
 
 ```bash
-euler-agent-submit --agent claude --remote-control --project mywork --time 8:00:00
+hpc-agent-submit --agent claude --remote-control --project mywork --time 8:00:00 \
+    --workspace       /scratch/$USER/agentic_ai/mywork \
+    --extra-read-bind /path/to/readonly/data
 ```
 
 A `claude.ai/code?environment=...` URL appears in `logs/slurm-<jobid>.out`. You cannot intervene
-on the node, and the session ends when `--time` runs out.
+on the node, and the session ends when `--time` runs out (at most 3 days on Curnagl).
+`--workspace` puts the workspace — where the session starts, read-write — at that directory
+instead of `<workspace_dir>/<project>`, e.g. a repo you cloned on the host.
+
+**Continue a session after the job ended** (e.g. it hit `--time`): submit again with the same
+`--project` and workspace, plus one of
+
+| Flag | Reattaches to | Passed as |
+|---|---|---|
+| `--rc-continue` | the Remote Control session last recorded for the workspace — only within roughly 4 hours of it | `claude remote-control --continue` |
+| `--rc-session-id ID` | that session | `claude remote-control --session-id ID` |
+
+```bash
+hpc-agent-submit --agent claude --remote-control --rc-continue --project mywork --time 8:00:00 \
+    --workspace /scratch/$USER/agentic_ai/mywork --extra-read-bind /path/to/readonly/data
+```
+
+The record should be in the shared agent home, so a new job can find it. Past the 4-hour window there
+is nothing to reattach to: start a new session and point it at the previous results. The same
+flags work with `--interactive`, where `claude-rc` then reattaches.
 
 **Auto-start on a node you hold.** Steps 1–3 as above, then drop `--interactive` so the session
 starts immediately instead of giving you a shell:
 
 ```bash
-module load eth_proxy
 cd /path/to/euler_agents
-bin/euler-agent-run --remote-control --agent claude --project mywork --gpu
+bin/hpc-agent-run --remote-control --agent claude --project mywork --gpu
 ```
 
 This runs in the foreground, answers the enable prompt itself, and prints the
@@ -336,28 +369,28 @@ its own run summary when it finishes.
 
 ```bash
 # One-off task (fresh timestamped workspace each run)
-euler-agent-submit --agent claude --task "Add type annotations to all functions in src/"
+hpc-agent-submit --agent claude --task "Add type annotations to all functions in src/"
 
 # Named project — workspace persists and is reused across jobs
-euler-agent-submit --agent claude --project myanalysis --task "Clone the repo and explore the data"
-euler-agent-submit --agent claude --project myanalysis --task "Now write a summary report"
+hpc-agent-submit --agent claude --project myanalysis --task "Clone the repo and explore the data"
+hpc-agent-submit --agent claude --project myanalysis --task "Now write a summary report"
 
 # Clone a repo into the workspace first
-euler-agent-submit --agent claude --project myanalysis \
+hpc-agent-submit --agent claude --project myanalysis \
     --repo https://github.com/org/myrepo \
     --task "Write unit tests for the data loading module"
 
 # Read the task from a file, or from config/task.json when no flag is given
-euler-agent-submit --agent claude --task-file tasks/myjob.md
-euler-agent-submit --agent claude
+hpc-agent-submit --agent claude --task-file tasks/myjob.md
+hpc-agent-submit --agent claude
 
 # Mount extra directories, exactly as in use case 1 (same path inside and outside)
-euler-agent-submit --agent claude --project myanalysis \
+hpc-agent-submit --agent claude --project myanalysis \
     --extra-read-bind /path/to/readonly/data \
     --task "Summarise the files in /path/to/readonly/data"
 
 # Override the job time limit
-euler-agent-submit --agent claude --task "..." --time 8:00:00
+hpc-agent-submit --agent claude --task "..." --time 8:00:00
 ```
 
 ### Read the results
@@ -371,7 +404,7 @@ cat <workspace_dir>/myanalysis/REPORT.md         # agent's own run summary
 `REPORT.md` gets one entry appended per run:
 
 ```
-## Run 2026-04-21T12:00:00Z  (job=12345  model=claude-sonnet-4-6  exit=0  cost=$1.2340)
+## Run 2026-04-21T12:00:00Z  (job=12345  model=opus  exit=0  cost=$1.2340)
 ```
 
 On a subscription the `cost=` figure is **notional** — computed from token usage at list prices,
@@ -383,21 +416,26 @@ so an unattended job can quietly consume quota. For real per-run accounting see
 
 ```bash
 # Named size preset from config/presets.json
-euler-agent-submit --agent claude --preset medium-gpu --project mygpuproject --task "..."
+hpc-agent-submit --agent claude --preset medium-gpu --project mygpuproject --task "..."
 
-# GPU with an explicit type and VRAM filter
-euler-agent-submit --agent claude --gpu \
-    --gpu-type nvidia_a100_80gb_pcie --gpu-mem 80g \
+# Any GPU on the site's GPU partition
+hpc-agent-submit --agent claude --gpu \
     --project mygpuproject --task "Train the model in train.py, checkpoints to a checkpoints/ subdir of the workspace"
 
+# Euler only: explicit type and VRAM filter
+hpc-agent-submit --agent claude --gpu --gpu-type nvidia_a100_80gb_pcie --gpu-mem 80g --task "..."
+
 # CPU sizing
-euler-agent-submit --agent claude --cpus 4 --mem-per-cpu 8G --task "..."
+hpc-agent-submit --agent claude --cpus 4 --mem-per-cpu 8G --task "..."
 ```
 
-`--gpu` sets `--gpus=<type>:1`, `--tmp=50G` and a 4-hour default time limit, and auto-selects a
-partition from the requested time. **Always pair `--gpu-type` with `--gpu-mem`** — on Euler the
-type name alone does not enforce which card you get. Types, VRAM values and partition families
-are tabulated in [GPUs, partitions and Slurm accounts](#gpus-partitions-and-slurm-accounts).
+`--gpu` requests one GPU in the site's form (`--gres=gpu:1` on Curnagl, `--gpus=<type>:1` on
+Euler; `--gpu-type` sets the type) with a 4-hour
+default time limit, on the site's GPU partition: `gpu` on Curnagl, a time-tiered `gpupr.*` on
+Euler. Without `--gpu` the job goes to the site's CPU partition (`cpu` on Curnagl). A `--time`
+above the site's limit (3 days on Curnagl) is refused before anything is submitted. On Euler,
+**always pair `--gpu-type` with `--gpu-mem`** — see
+[Euler: GPUs, partitions and Slurm accounts](#euler-gpus-partitions-and-slurm-accounts).
 
 ### Email notifications
 
@@ -424,8 +462,8 @@ and the `REPORT.md` summary; success emails include the summary and the cost.
 Toggle success notifications for a single run without editing config:
 
 ```bash
-euler-agent-submit --agent claude --task "..." --notify-success      # on for this run
-euler-agent-submit --agent claude --task "..." --no-notify-success   # off for this run
+hpc-agent-submit --agent claude --task "..." --notify-success      # on for this run
+hpc-agent-submit --agent claude --task "..." --no-notify-success   # off for this run
 ```
 
 ---
@@ -445,7 +483,16 @@ directory. With `--project NAME`, every run for that project shares
 Names may be nested to group related workspaces: `--project shi/omicsMSA` uses
 `<workspace_dir>/shi/omicsMSA`, creating the parent as needed. Each segment is limited to
 letters, digits, `.`, `_` and `-`; the Remote Control session is then named
-`euler-rc-shi-omicsMSA-<jobid>`.
+`hpc-rc-shi-omicsMSA-<jobid>`.
+
+`--workspace DIR` (absolute, requires `--project`) uses DIR as the workspace instead of
+`<workspace_dir>/<project>`, creating it if needed; `--project` then only names the session.
+Use it to start the agent in a repo or results directory that lives elsewhere:
+
+```bash
+hpc-agent-submit --agent claude --remote-control --project mywork \
+    --workspace ~/src/myrepo
+```
 
 > Do not run two jobs with the same `--project` in parallel — agents writing to the same
 > workspace will conflict. Run them sequentially.
@@ -464,8 +511,8 @@ The directory lives in this repo by default. To keep it off your home quota, set
 `home-claude/` (and `home-codex/`) there once:
 
 ```bash
-mkdir -p /cluster/project/<group>/<user>/agentic_ai/agent-homes
-mv home-claude home-codex /cluster/project/<group>/<user>/agentic_ai/agent-homes/
+mkdir -p /work/<project_dir>/agentic_ai/agent-homes
+mv home-claude home-codex /work/<project_dir>/agentic_ai/agent-homes/
 ```
 
 Leftover `<workspace>/<project>/.claude-home` directories from the earlier per-project design
@@ -497,9 +544,12 @@ guaranteed; rebuild the image if it misbehaves.
 
 | Flag | Controls | Default |
 |---|---|---|
-| `--model` | Model — haiku ≪ sonnet ≪ opus in cost | `claude-opus-4-8` |
+| `--model` | Model: an alias (`opus`, `sonnet`, `haiku`; haiku ≪ sonnet ≪ opus in cost) or a full ID such as `claude-opus-5-5` | `opus` |
 | `--effort` | Thinking depth: `low / medium / high / xhigh / max` | Claude default |
 | `--max-budget-usd` | Hard cap; the agent stops with `error_max_budget_usd` when hit | `10` |
+
+An alias resolves to the newest model of that family the image's Claude Code knows, so the
+default moves forward when the image is rebuilt; pass a full ID to pin one.
 
 Priority order: CLI flag > `config/task.json` > `config/settings.json`. To change the defaults
 for every run, edit the `"claude"` block in `config/settings.local.json`.
@@ -529,7 +579,7 @@ Nothing accumulates under `~`: the host home is never mounted, `~` inside is the
 `config/settings.local.json` to match your host setup (they mirror `~/.condarc` and `$PIXI_HOME`).
 
 ```bash
-euler-agent-submit --agent claude --project myproject \
+hpc-agent-submit --agent claude --project myproject \
     --task "Create a conda environment 'myenv' with python=3.11 and numpy, then verify it."
 ```
 
@@ -543,9 +593,9 @@ conda activate <workspace_dir>/myproject/conda_envs/myenv
 
 ### GPU access inside the container
 
-`--gpu` on `euler-agent-run` passes `--nv` to Singularity, which is what exposes the NVIDIA
+`--gpu` on `hpc-agent-run` passes `--nv` to Singularity, which is what exposes the NVIDIA
 driver and devices to the agent. It works on both paths. In use case 2 it *also* makes
-`euler-agent-submit` request a GPU node; in use case 1 the node already has the GPU from your
+`hpc-agent-submit` request a GPU node; in use case 1 the node already has the GPU from your
 own allocation, and `--gpu` only affects the container.
 
 ### Git: the agent commits, you push
@@ -556,12 +606,14 @@ repo or a data file, and a single wrong `git push --force` on the wrong repo has
 
 - **Inside** the agent can `git clone` public repos, and `git commit` freely in any read-write
   bind. Commits are attributed to `git_user_name` / `git_user_email` from settings (default
-  `euler-agent`, override in `config/settings.local.json` if you want your own identity) and
-  carry a `Co-Authored-By` trailer naming the agent and model, added by
-  `config/git-hooks/commit-msg`:
+  `hpc-agent`, override in `config/settings.local.json` if you want your own identity) and
+  carry one `Co-Authored-By` trailer naming the agent. Claude Code adds its own, with the
+  model that actually ran; `config/git-hooks/commit-msg` adds one only when the agent did
+  not (Codex, or Claude with its attribution turned off), naming the model only for headless
+  runs, where `--model` decided it:
 
   ```
-  Co-Authored-By: Claude (claude-opus-4-8) <noreply@anthropic.com>
+  Co-Authored-By: Codex (gpt-5.4) <noreply@openai.com>
   ```
 
 - **Outside**, when the run is done, you review and push from the host with your own
@@ -611,57 +663,100 @@ What it does **not** protect against:
 Treat anything you pass to the agent the way you would treat code you are about to `bash -c` on
 a compute node.
 
+### Organisation policies
+
+If your claude.ai account belongs to a Team or Enterprise organisation, its admins can push
+**managed settings** that apply to every session logged in with that account, including the one
+in the container. The harness cannot override them, and does not try. A policy that disables
+bypass-permissions mode breaks the unattended modes: Claude asks for approval that nobody can
+give, so tool calls such as `Write` or `Bash` are denied.
+
+Symptoms:
+
+- A headless job ends with exit code 3 and the log shows
+  `WARNING: Claude was denied tool calls despite --dangerously-skip-permissions`. `REPORT.md`
+  lists the denied tools. (`claude -p` itself exits 0 in this case. `inner.sh` checks
+  `permission_denials` in its JSON output and marks the run failed.)
+- A Remote Control session keeps asking for approval in the app.
+- `/status` in an interactive container lists `Enterprise managed settings (remote)` under
+  *Setting sources*. `/permissions` shows which rules come from the policy.
+
+What to do:
+
+- Ask your organisation's claude.ai admin to allow bypass-permissions mode for your account. The
+  table above describes what the container does and does not protect, which helps make the case.
+- Or log in to the container with an account that is not under that policy
+  (`hpc-agent-run --claude-login`), if your organisation allows that for this work.
+- Interactive sessions still work, as long as you approve each step yourself.
+
+Don't recreate bypass mode by putting broad allow rules (all of `Bash`, `Write`, `Edit`) into the
+agent home's settings. That gets around a decision your organisation made deliberately.
+
 ### Configuration files
 
 | File | Tracked | Holds |
 |---|---|---|
 | `config/settings.json` | yes | committed defaults: image path, workspace dirs, host tool dirs (`conda_envs_dir`, `conda_pkgs_dir`, `pixi_home`, `cache_dir`), `agent_home_dir` (where `home-claude/` lives; null = this repo), git identity, SLURM sizes, per-agent model/budget/auth |
+| `config/sites/<site>.json` | yes | cluster profile selected by `"site"`: modules to load, container command, CPU/GPU partitions, GPU request style, max wall time, mail domain, preset overrides. Tweak single keys with `"site_overrides"` in settings |
 | `config/settings.local.json` | no | your overrides; merged over `settings.json` **shallowly** (a top-level key replaces the whole block) |
 | `config/secrets.env` | no | template for credentials |
 | `config/secrets.local.env` | no | real credentials: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` (only needed for `--auth subscription|apikey`) |
 | `config/task.json` | yes | default task plus model/effort/budget/repo/project, used when no `--task`/`--task-file` is given |
-| `config/presets.json` | yes | named SLURM size presets for `euler-agent-submit --preset` |
-| `config/agent-CLAUDE.md.template` | yes | environment description to copy into a bind as the agent's `CLAUDE.md` |
+| `config/presets.json` | yes | named SLURM size presets for `hpc-agent-submit --preset` |
+| `config/agent-CLAUDE.md.template` | yes | template for a repository's `CLAUDE.md` with project notes (data, environments, conventions) |
 
 ### Telling the agent about its environment
 
 The agent does not know by itself that it is in a container on a cluster. The things that
 surprise it: `~` is `/home` and not your host home, there are no SLURM binaries so it cannot
-submit jobs, and the filesystem contains only what you bound. Three ways to tell it, from
-least to most effort:
+submit jobs, and the filesystem contains only what you bound.
 
-**1. Start the session with the generated briefing (interactive).** Every launch writes
-`/tmp/agent-briefing.md` inside the container. It contains a short generic explanation of the
-environment (from `config/agent-briefing.md`) followed by a table of this run's actual mounts and
-their modes. Hand it to the agent as the first message:
+**Claude is told automatically.** Every launch writes `/tmp/agent-briefing.md` inside the
+container: a short explanation of the environment (from `config/agent-briefing.md`) followed by
+this run's actual mounts and their modes, and — inside a SLURM job — when the job will be
+killed, with a one-liner to check the remaining time and the instruction to wrap up (commit,
+write notes) in the last 3–30 minutes, scaled to the job length. The agent home's user-level `CLAUDE.md`
+(`/home/.claude/CLAUDE.md`, rebuilt at every launch) imports it with `@/tmp/agent-briefing.md`,
+so Claude loads it at the start of every session — interactive, headless and Remote Control —
+without anything to paste. All containers share that one `CLAUDE.md`, but `/tmp` is private to
+each launch, so each container reads its own mount table. To check, ask the agent which mounts
+it has, or run `/memory` in an interactive session.
+
+That file starts with a copy of your own global `~/.claude/CLAUDE.md`, so your personal
+instructions apply inside the container too. Codex does not read it; paste the briefing there
+by hand (`cat /tmp/agent-briefing.md`).
+
+**Project knowledge goes in the repository's `CLAUDE.md`.** Where the data lives, which
+environment to use, how results are organised: put that in a `CLAUDE.md` in the directory the
+agent works in, and Claude loads it from there. `config/agent-CLAUDE.md.template` is a starting
+point. Host sessions in that directory read the same file, so keep container-specific statements
+out of it — the briefing covers those.
 
 ```bash
-claude "$(cat /tmp/agent-briefing.md)"
+cp config/agent-CLAUDE.md.template ~/src/myrepo/CLAUDE.md
 ```
 
-The container shell's banner reminds you of this command.
+### Cluster profiles
 
-**2. Paste `config/agent-briefing.md` by hand.** Same text as option 1 without the mount table.
-Useful when you are already inside a session.
+Everything cluster-specific lives in `config/sites/<site>.json`, picked by `"site"` in the
+settings (default `curnagl`):
 
-**3. Put a `CLAUDE.md` into the repository the agent works in (permanent).** Claude Code
-loads `CLAUDE.md` automatically from its working directory and that directory's parents, so a
-file committed to the repo is picked up in every session started there, without pasting
-anything. `config/agent-CLAUDE.md.template` is a starting point for such a file: the same
-explanation as the briefing, plus a mount table you fill in once for that repo. Copy it and edit
-the table:
+| Key | Curnagl | Euler |
+|---|---|---|
+| `modules` | `["singularityce"]` | `["eth_proxy"]` (compute nodes need the proxy for internet) |
+| `container_cmd` | `singularity` | `singularity` |
+| `max_time` | `3-00:00:00` | none |
+| `cpu_partition` / `gpu_partition` | `cpu` / `gpu` | none / chosen from `gpu_partitions_by_hours` |
+| `gpu_request` | `--gres=gpu:{type}1` | `--gpus={type}1` (`{type}` = `TYPE:` or empty) |
+| `default_gpu_type` | none (any GPU) | `a100` |
+| `gpu_mem_gres` | false | true (`--gpu-mem` allowed) |
 
-```bash
-cp config/agent-CLAUDE.md.template /cluster/home/<user>/src/myrepo/CLAUDE.md
-```
+`hpc-agent-run` loads the modules on every launch — in a batch job, on a node you hold, and for
+`--claude-login` — so none of the commands in this README need a `module load` first. For
+another cluster, copy one of the files and set `"site"` to its name. To change a single key
+without a new file, use `"site_overrides": { "modules": [] }` in `config/settings.local.json`.
 
-Placing it in this `euler_agents` repo would not work: it is mounted read-only and is not a
-parent of the agent's working directory.
-
-Independently of these, your own global `~/.claude/CLAUDE.md` is loaded in every run: the
-launcher copies it into the agent home at launch.
-
-### GPUs, partitions and Slurm accounts
+### Euler: GPUs, partitions and Slurm accounts
 
 | GPU | `--gpu-type` | `--gpu-mem` | Partition family |
 |---|---|---|---|
@@ -696,11 +791,12 @@ definition, so a rebuild is how new model support arrives. Build to a **dated fi
 repoint `image_path`, so the previous image stays as an instant rollback:
 
 ```bash
-module load eth_proxy
+module load singularityce        # Euler: module load eth_proxy
 export APPTAINER_TMPDIR="${TMPDIR:-/tmp}/apptainer_tmp"; mkdir -p "$APPTAINER_TMPDIR"
 singularity build --fakeroot \
-    /cluster/project/<group>/<user>/images/euler-agents-YYYYMMDD.sif \
-    images/euler-agents.def
+    --build-arg CLAUDE_CODE_VERSION="$(claude --version | awk '{print $1}')" \
+    /work/<project_dir>/agentic_ai/images/hpc-agents-YYYYMMDD.sif \
+    images/hpc-agents.def
 ```
 
 `images/README.md` has the full procedure, the smoke test, and a log of past rebuilds and why.
@@ -709,15 +805,16 @@ singularity build --fakeroot \
 
 | Script | Runs where | Role |
 |---|---|---|
-| `bin/euler-agent-submit` | login node | writes and submits the SLURM job, or `srun --pty` for an interactive one; forwards everything else to `euler-agent-run` |
-| `slurm/run-agent.sh` | compute node | thin SLURM wrapper that calls `euler-agent-run` |
-| `bin/euler-agent-run` | compute or login node | resolves config, sets up the workspace, tmpdir and home, then starts Singularity. This is the only script that launches a container, and it needs no SLURM |
+| `bin/host-config.sh` | login or compute node | sourced by `submit` and `run`: merges the settings files and the site profile, loads the site's modules |
+| `bin/hpc-agent-submit` | login node | writes and submits the SLURM job, or `srun --pty` for an interactive one; forwards everything else to `hpc-agent-run` |
+| `slurm/run-agent.sh` | compute node | thin SLURM wrapper that calls `hpc-agent-run` |
+| `bin/hpc-agent-run` | compute or login node | resolves config, sets up the workspace, tmpdir and home, then starts Singularity. This is the only script that launches a container, and it needs no SLURM |
 | `bin/container-env.sh` | inside container | sourced by both entrypoints: `HOME`/`PATH`, conda and cache dirs, git identity and hook — so the two paths cannot drift |
 | `bin/inner.sh` | inside container | the non-interactive entrypoint: runs the task headless or starts Remote Control, then parses cost and writes `REPORT.md` |
 | `bin/claude-shellrc` | inside container | the interactive entrypoint's rcfile: wraps `claude`/`codex` to skip permission prompts and adds `claude-rc` |
 | `bin/notify.sh` | compute node | sends the completion email after a submitted run |
 
-The `--interactive` and headless paths diverge at the end of `euler-agent-run`: interactive
+The `--interactive` and headless paths diverge at the end of `hpc-agent-run`: interactive
 starts `bash --rcfile bin/claude-shellrc`, headless starts `bin/inner.sh` (both addressed through
 the repo's host path, which is where it is bound). What `inner.sh` adds on top of the shared
 setup — cost reporting, `REPORT.md`, notifications — does not happen in an interactive session.
@@ -732,7 +829,6 @@ refreshable login copied into every run's home — the token is static and injec
 instead. Generate it on a login node:
 
 ```bash
-module load eth_proxy
 claude setup-token            # prints a token, sk-ant-oat...
 echo "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-..." >> config/secrets.local.env
 chmod 600 config/secrets.local.env
@@ -746,7 +842,7 @@ per-run cost accounting and a budget cap that is a genuine dollar limit.
 ```bash
 echo "ANTHROPIC_API_KEY=sk-ant-..." >> config/secrets.local.env
 chmod 600 config/secrets.local.env
-euler-agent-submit --agent claude --auth apikey --max-budget-usd 3 --task "..."
+hpc-agent-submit --agent claude --auth apikey --max-budget-usd 3 --task "..."
 ```
 
 With an API key, `cost=` in `REPORT.md` is money actually spent. On either subscription mode it is
@@ -776,7 +872,7 @@ Claude-only.
 | | Codex | Claude |
 |---|---|---|
 | Auth | browser OAuth → `home-codex/` | subscription token or API key |
-| Default model | `gpt-5.4` | `claude-opus-4-8` |
+| Default model | `gpt-5.4` | `opus` |
 | Cost reporting | not implemented | `REPORT.md` (real with an API key, notional on a subscription) |
 | Budget cap | none | `--max-budget-usd` |
 
@@ -787,11 +883,11 @@ mounted as `$HOME` in every run. Once, on a login node:
 
 ```bash
 cd ~/src/euler_agents
-module load eth_proxy
+module load singularityce        # Euler: module load eth_proxy
 singularity shell --cleanenv --containall \
     --home "$(pwd)/home-codex:/home" \
     --bind /tmp:/tmp \
-    /cluster/project/beltrao/jbuhmann/agentic_ai/images/euler-agents.sif
+    <image_path>
 ```
 
 Inside the container, complete the browser OAuth flow:

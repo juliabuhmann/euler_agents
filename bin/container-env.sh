@@ -2,8 +2,8 @@
 # bin/claude-shellrc (interactive) — so the two paths set up the same environment
 # instead of drifting apart. Not executable on purpose.
 #
-# Relies on the variables bin/euler-agent-run injects with --env:
-#   EULER_AGENTS_DIR   this repo, bound read-only at its host path
+# Relies on the variables bin/hpc-agent-run injects with --env:
+#   HPC_AGENTS_DIR   this repo, bound read-only at its host path
 #   AGENT_WORKSPACE    the project workspace, bound read-write at its host path
 #   GIT_USER_NAME / GIT_USER_EMAIL   commit identity (not a credential)
 #   CONDA_PKGS_DIRS    single path: host package cache or /tmp fallback
@@ -27,6 +27,6 @@ mkdir -p "${CONDA_PKGS_DIRS:-/tmp/conda_pkgs}"
 # Git identity so `git commit` works, plus the commit-msg hook that appends the
 # Co-Authored-By trailer. No token is ever injected: the agent commits locally and
 # the user pushes from the host after the run.
-git config --global user.name  "${GIT_USER_NAME:-euler-agent}"
-git config --global user.email "${GIT_USER_EMAIL:-euler-agent@noreply.invalid}"
-git config --global core.hooksPath "${EULER_AGENTS_DIR:?EULER_AGENTS_DIR not set}/config/git-hooks"
+git config --global user.name  "${GIT_USER_NAME:-hpc-agent}"
+git config --global user.email "${GIT_USER_EMAIL:-hpc-agent@noreply.invalid}"
+git config --global core.hooksPath "${HPC_AGENTS_DIR:?HPC_AGENTS_DIR not set}/config/git-hooks"

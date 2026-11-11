@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Send a job completion or failure notification via email.
-# Called by euler-agent-run after the agent finishes.
+# Called by hpc-agent-run after the agent finishes.
 #
-# Required env vars (set by euler-agent-run):
+# Required env vars (set by hpc-agent-run):
 #   NOTIFY_EMAIL_ENABLED  — true|false
 #   NOTIFY_EMAIL_ADDRESS  — recipient
 #   NOTIFY_ON_FAILURE     — true|false
 #   NOTIFY_ON_SUCCESS     — true|false
 #   LOGS_DIR              — path to slurm log directory
+#   MAIL_DOMAIN           — sender domain, from the site profile
 
 AGENT_EXIT=0
 WORKSPACE=""
@@ -73,7 +74,7 @@ fi
 
 /usr/sbin/sendmail -t << EOF
 To: $ADDRESS
-From: ${USER:-euler}@ethz.ch
+From: ${USER:-hpc-agents}@${MAIL_DOMAIN:-localhost}
 Subject: Job ${STATUS}: $AGENT ($JOB_ID)
 
 $BODY

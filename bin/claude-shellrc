@@ -1,13 +1,13 @@
-# Interactive rcfile for the in-container shell (euler-agent-run --interactive).
+# Interactive rcfile for the in-container shell (hpc-agent-run --interactive).
 #
-# Not sourced from the host: bin/euler-agent-run binds the repo read-only at its
-# own host path, so this file is inside the container at $EULER_AGENTS_DIR/bin/
+# Not sourced from the host: bin/hpc-agent-run binds the repo read-only at its
+# own host path, so this file is inside the container at $HPC_AGENTS_DIR/bin/
 # claude-shellrc and is passed to bash via --rcfile.
 #
 # Purpose: make the bare `claude` / `codex` commands behave the same way they do
 # on the non-interactive path in bin/inner.sh, which runs them with their
 # permission prompts bypassed. The container boundary is what contains the agent:
-# euler-agent-run uses --cleanenv --containall with explicit binds, so a bypassed
+# hpc-agent-run uses --cleanenv --containall with explicit binds, so a bypassed
 # agent can still only reach the workspace, /home, /tmp, the host tool dirs from
 # settings and whatever was passed via --extra-bind — each at its host path. The
 # repo itself is bound read-only, so the agent cannot edit the scripts that
@@ -20,10 +20,10 @@
 # the container environment, which runs before the first prompt and would
 # overwrite PS1 set here. Drop it so the prompt shows we are in this wrapper.
 unset PROMPT_COMMAND
-export PS1='(euler-agents) \w \$ '
+export PS1='(hpc-agents) \w \$ '
 
 # HOME, PATH, conda/cache dirs, git identity + hook — shared with bin/inner.sh.
-source "${EULER_AGENTS_DIR:?EULER_AGENTS_DIR not set}/bin/container-env.sh"
+source "${HPC_AGENTS_DIR:?HPC_AGENTS_DIR not set}/bin/container-env.sh"
 
 # Claude Code. Management subcommands are passed through untouched — the bypass
 # flag changes their argument parsing, so `claude --version` and `claude mcp list`
@@ -43,18 +43,26 @@ claude() {
 # Kept as its own command rather than folded into claude() above: the
 # remote-control subcommand rejects --dangerously-skip-permissions and takes
 # --permission-mode instead. It also needs the full-scope OAuth login in a
-# persistent home, which only `euler-agent-run --remote-control` sets up.
+# persistent home, which only `hpc-agent-run --remote-control` sets up.
 claude-rc() {
     if [[ "${REMOTE_CONTROL:-}" != "true" ]]; then
         echo "claude-rc: this container was not started for Remote Control." >&2
-        echo "  Relaunch with: euler-agent-run --remote-control --interactive --project NAME" >&2
+        echo "  Relaunch with: hpc-agent-run --remote-control --interactive --project NAME" >&2
         return 1
     fi
     # Supply defaults only for flags the caller did not pass, so
     # `claude-rc --name foo` does not end up with --name twice.
     local args=("$@")
     [[ " $* " == *" --permission-mode "* ]] || args=(--permission-mode bypassPermissions "${args[@]+"${args[@]}"}")
-    [[ " $* " == *" --name "*            ]] || args=(--name "${RC_SESSION_NAME:-euler-rc}" "${args[@]+"${args[@]}"}")
+    [[ " $* " == *" --name "*            ]] || args=(--name "${RC_SESSION_NAME:-hpc-rc}" "${args[@]+"${args[@]}"}")
+    # --rc-continue / --rc-session-id given to hpc-agent-run, unless the caller chose here.
+    if [[ " $* " != *" --continue "* && " $* " != *" -c "* && " $* " != *" --session-id "* ]]; then
+        if [[ -n "${RC_SESSION_ID:-}" ]]; then
+            args+=(--session-id "$RC_SESSION_ID")
+        elif [[ "${RC_CONTINUE:-}" == "true" ]]; then
+            args+=(--continue)
+        fi
+    fi
     echo "Starting Remote Control in $PWD"
     echo "Pick it up at https://claude.ai/code or in the Claude mobile app."
     command claude remote-control "${args[@]}"
@@ -73,11 +81,11 @@ codex() {
 }
 
 # Banner once per container session, not for nested interactive shells.
-if [[ -z "${EULER_AGENTS_RC_LOADED:-}" ]]; then
-    export EULER_AGENTS_RC_LOADED=1
+if [[ -z "${HPC_AGENTS_RC_LOADED:-}" ]]; then
+    export HPC_AGENTS_RC_LOADED=1
     printf '\n'
-    printf 'euler-agents container shell\n'
-    printf '  claude / codex  are wrapped to skip permission prompts (see %s/bin/claude-shellrc)\n' "$EULER_AGENTS_DIR"
+    printf 'hpc-agents container shell\n'
+    printf '  claude / codex  are wrapped to skip permission prompts (see %s/bin/claude-shellrc)\n' "$HPC_AGENTS_DIR"
     printf '  command claude  runs the CLI unwrapped, with prompts enabled\n'
     printf '  paths           every bound directory is at its host path; only ~ (/home) differs\n'
     printf '  workspace       %s (persistent)\n' "$AGENT_WORKSPACE"
@@ -85,7 +93,7 @@ if [[ -z "${EULER_AGENTS_RC_LOADED:-}" ]]; then
         printf '  claude-rc       start a Remote Control session (steer from claude.ai/code or mobile)\n'
     printf '  /home           the persistent agent home, shared by all containers; /tmp is discarded\n'
     printf '  git             commit freely; there is no push credential — the user pushes from the host\n'
-    printf '  briefing        /tmp/agent-briefing.md describes this environment + its mounts;\n'
-    printf '                  start with:  claude "$(cat /tmp/agent-briefing.md)"\n'
+    printf '  briefing        /tmp/agent-briefing.md (environment + mounts) is loaded by claude\n'
+    printf '                  automatically, via the agent home'"'"'s CLAUDE.md\n'
     printf '\n'
 fi

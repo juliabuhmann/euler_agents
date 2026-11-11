@@ -4,8 +4,8 @@
 set -euo pipefail
 
 # HOME, PATH, conda/cache dirs, git identity + hook — shared with the interactive rcfile.
-# The repo is bound at its host path, so it is addressed via EULER_AGENTS_DIR.
-source "${EULER_AGENTS_DIR:?EULER_AGENTS_DIR not set}/bin/container-env.sh"
+# The repo is bound at its host path, so it is addressed via HPC_AGENTS_DIR.
+source "${HPC_AGENTS_DIR:?HPC_AGENTS_DIR not set}/bin/container-env.sh"
 
 AGENT="${AGENT:?AGENT env var not set}"
 REPO_URL="${REPO_URL:-}"
@@ -19,7 +19,7 @@ JOB_ID="${SLURM_JOB_ID:-interactive}"
 # Verified: the `remote-control` subcommand runs headless (no TTY), unlike the
 # `--remote-control` flag which falls through to --print and demands stdin input.
 if [[ "${REMOTE_CONTROL:-}" == "true" ]]; then
-    RC_NAME="${RC_SESSION_NAME:-euler-rc}"
+    RC_NAME="${RC_SESSION_NAME:-hpc-rc}"
     cd "$AGENT_WORKSPACE"
     if [[ -n "$REPO_URL" ]]; then
         REPO_NAME=$(basename "$REPO_URL" .git)
@@ -45,8 +45,17 @@ PY
     echo "------------"
     # Auto-answer the 'Enable Remote Control?' prompt (no TTY under SLURM), and bypass
     # per-action approvals so the agent can work unattended while you steer intermittently.
+    # --rc-continue / --rc-session-id reattach to an earlier session instead of creating one.
+    RC_ARGS=(--name "$RC_NAME" --permission-mode bypassPermissions)
+    if [[ -n "${RC_SESSION_ID:-}" ]]; then
+        RC_ARGS+=(--session-id "$RC_SESSION_ID")
+        echo "Reattaching to Remote Control session $RC_SESSION_ID"
+    elif [[ "${RC_CONTINUE:-}" == "true" ]]; then
+        RC_ARGS+=(--continue)
+        echo "Reattaching to the last Remote Control session recorded for $PWD (within ~4 h)"
+    fi
     set +e
-    printf 'y\n' | claude remote-control --name "$RC_NAME" --permission-mode bypassPermissions
+    printf 'y\n' | claude remote-control "${RC_ARGS[@]}"
     RC_EXIT=$?
     set -e
     exit "$RC_EXIT"
@@ -118,7 +127,7 @@ case "$AGENT" in
         set -e
         ;;
     claude)
-        MODEL="${MODEL:-claude-opus-4-8}"
+        MODEL="${MODEL:-opus}"
         CLAUDE_ARGS=(--dangerously-skip-permissions --model "$MODEL" -p --output-format json)
         [[ -n "$MAX_BUDGET_USD" ]] && CLAUDE_ARGS+=(--max-budget-usd "$MAX_BUDGET_USD")
         [[ -n "$AGENT_EFFORT"   ]] && CLAUDE_ARGS+=(--effort "$AGENT_EFFORT")
@@ -163,6 +172,29 @@ except Exception as e:
     print("Warning: could not extract summary from claude-output.json: %s" % e, file=sys.stderr)
 '
     fi
+    # Tool calls Claude was not allowed to make. With --dangerously-skip-permissions there
+    # should be none; if there are, a policy is overriding the bypass (typically the
+    # claude.ai organisation's managed settings, see README "Organisation policies") and
+    # the task most likely did not get done, although claude itself exits 0. Count the
+    # run as failed so it shows up in REPORT.md, the exit code and failure emails.
+    PERMISSION_DENIALS=$(python3 -c '
+import collections, json
+try:
+    d = json.load(open("/tmp/claude-output.json"))
+except Exception:
+    raise SystemExit
+names = collections.Counter(x.get("tool_name", "?") for x in d.get("permission_denials") or [])
+print(", ".join("%s x%d" % kv for kv in names.most_common()))
+')
+    if [[ -n "$PERMISSION_DENIALS" ]]; then
+        {
+            echo "=== WARNING: Claude was denied tool calls despite --dangerously-skip-permissions ==="
+            echo "  denied: $PERMISSION_DENIALS"
+            echo "  Most likely a managed policy disables bypass mode; check /status inside the"
+            echo "  container for 'Enterprise managed settings'. See README, Organisation policies."
+        } >&2
+        [[ "$AGENT_EXIT" -eq 0 ]] && AGENT_EXIT=3
+    fi
     # On failure, surface Claude's raw JSON to the job log — otherwise the stop
     # reason (budget cap, max turns, API/auth error) dies with the container tmpdir.
     if [[ "$AGENT_EXIT" -ne 0 ]]; then
@@ -190,6 +222,9 @@ if [[ -f /tmp/run-summary.txt ]]; then
     {
         printf '\n## Run %s  (job=%s  model=%s  exit=%s%s)\n\n' \
             "$RUN_TS" "$JOB_ID" "$MODEL" "$AGENT_EXIT" "${AGENT_COST:+  cost=\$$AGENT_COST}"
+        [[ -n "${PERMISSION_DENIALS:-}" ]] && \
+            printf '**Permission denials:** %s. Bypass mode was not in effect, so this run is marked failed; see the job log.\n\n' \
+                "$PERMISSION_DENIALS"
         cat /tmp/run-summary.txt
     } >> "$AGENT_WORKSPACE/REPORT.md"
     echo "=== Summary appended to $AGENT_WORKSPACE/REPORT.md ==="

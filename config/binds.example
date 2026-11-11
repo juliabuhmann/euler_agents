@@ -1,5 +1,5 @@
-# Example binds file for `euler-agent-run --binds-file FILE` (also accepted by
-# euler-agent-submit). Copy it into a repository, e.g. as `euler-agents.binds`,
+# Example binds file for `hpc-agent-run --binds-file FILE` (also accepted by
+# hpc-agent-submit). Copy it into a repository, e.g. as `hpc-agents.binds`,
 # edit, and pass its path; every entry is mounted at its host path.
 #
 # One SRC[:DEST][:ro|rw] per line. Mode defaults to ro. '#' starts a comment.

@@ -1,0 +1,21 @@
+{
+  "description": "UNIL Curnagl: compute nodes have direct internet; SingularityCE is a module",
+  "modules": ["singularityce"],
+  "container_cmd": "singularity",
+  "max_time": "3-00:00:00",
+  "cpu_partition": "cpu",
+  "gpu_partition": "gpu",
+  "gpu_partitions_by_hours": null,
+  "gpu_request": "--gres=gpu:{type}1",
+  "default_gpu_type": null,
+  "gpu_mem_gres": false,
+  "gpu_sbatch_args": [],
+  "mail_domain": "unil.ch",
+  "presets": {
+    "medium-gpu": {
+      "cpus": 4,
+      "mem_per_cpu": "8G",
+      "gpu": true
+    }
+  }
+}

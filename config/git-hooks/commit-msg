@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
-# Appends a Co-Authored-By trailer identifying the AI agent that made the commit.
-# Reads AGENT and AGENT_MODEL from the container environment (set by euler-agent-run).
+# Appends a Co-Authored-By trailer identifying the AI agent that made the commit, unless the
+# agent already added one itself. Claude Code adds its own trailer, naming the model it
+# actually ran, so for Claude this usually does nothing; Codex adds none.
+# Reads AGENT and AGENT_MODEL from the container environment (set by hpc-agent-run).
+# AGENT_MODEL is set only for headless runs, where --model decides the model; in interactive
+# and Remote Control sessions the model is picked in the session, so it is left out.
 set -euo pipefail
 
 COMMIT_MSG_FILE="$1"
 AGENT="${AGENT:-unknown}"
-MODEL="${AGENT_MODEL:-unknown}"
+MODEL="${AGENT_MODEL:-}"
 
 case "$AGENT" in
     claude) AUTHOR="Claude";  EMAIL="noreply@anthropic.com" ;;
     codex)  AUTHOR="Codex";   EMAIL="noreply@openai.com"    ;;
-    *)      AUTHOR="$AGENT";  EMAIL="noreply@euler-agents"  ;;
+    *)      AUTHOR="$AGENT";  EMAIL="noreply@hpc-agents"  ;;
 esac
+
 
 TRAILER="Co-Authored-By: ${AUTHOR} (${MODEL}) <${EMAIL}>"
 

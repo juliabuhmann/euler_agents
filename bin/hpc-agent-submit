@@ -2,7 +2,7 @@
 # User-facing entry point for submitting agent jobs.
 #
 # Usage:
-#   euler-agent-submit [--agent codex|claude] [--task "prompt"] [--task-file FILE]
+#   hpc-agent-submit [--agent codex|claude] [--task "prompt"] [--task-file FILE]
 #                      [--repo URL] [--model MODEL] [--time HH:MM:SS] [--interactive]
 #                      [--gpu] [--gpu-type TYPE] [--partition NAME]
 #
@@ -12,98 +12,88 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-euler-agent-submit — submit an AI coding agent job to Euler's SLURM cluster
+hpc-agent-submit — submit an AI coding agent job to Euler's SLURM cluster
 
 USAGE
-  euler-agent-submit [OPTIONS]
+  hpc-agent-submit [OPTIONS]
 
 OPTIONS
   --agent  codex|claude   Agent to run (default: codex)
   --task   "PROMPT"       Task description passed to the agent
   --task-file FILE        Read task from a file instead of --task
   --repo   URL            Git repo to clone into the workspace before running
-  --model  MODEL          Override the model (e.g. claude-sonnet-4-6, gpt-5.4)
+  --model  MODEL          Override the model (e.g. opus, sonnet, claude-opus-5-5, gpt-5.4)
   --time   HH:MM:SS       SLURM wall-clock limit (default from config/settings.json)
   --interactive           Open a shell on a compute node via srun instead of sbatch
   --notify-success        Send a notification email on success (overrides config)
   --no-notify-success     Suppress success notification for this run (overrides config)
-  --gpu                   Request a GPU node (adds --gpus, --tmp=50G, sets GPU partition)
-  --gpu-type TYPE         GPU type to request (default: a100). Known types on Euler:
+  --gpu                   Request one GPU and the site's GPU partition (see config/sites/)
+  --gpu-type TYPE         GPU type to request, in the site's form ("gpu_request": Curnagl
+                            --gres=gpu:TYPE:1, Euler --gpus=TYPE:1). Default from the site
+                            profile; none means any GPU. Known types on Euler:
                             a100                    — any A100 (40 or 80 GB)
                             nvidia_a100_80gb_pcie   — A100 80 GB (use with --gpu-mem 80g)
                             nvidia_rtx_pro_6000     — RTX Pro 6000 Blackwell 96 GB
                             nvidia_geforce_rtx_4090 — RTX 4090 24 GB
                             nvidia_geforce_rtx_3090 — RTX 3090 24 GB
-  --preset NAME           Apply a resource preset from config/presets.json.
-                            Built-in: lightweight (1 CPU, 2G), medium-cpu (4 CPU, 32G),
-                            medium-gpu (4 CPU, 32G, A100 40GB). Individual flags override preset.
+  --preset NAME           Apply a resource preset from config/presets.json (a site profile
+                            may redefine one). Built-in: lightweight (1 CPU, 2G),
+                            medium-cpu (4 CPU, 32G), medium-gpu (4 CPU, 32G, one GPU).
+                            Individual flags override the preset.
   --cpus N                Number of CPUs (default from settings).
   --mem-per-cpu SIZE      RAM per CPU, e.g. 4G or 8G (default from settings).
                             Total RAM = N × SIZE. e.g. --cpus 6 --mem-per-cpu 8G gives 48 GB.
   --gpu-mem SIZE          GPU memory filter, e.g. 80g or 96g. Adds --gres=gpumem:SIZE
                             to the sbatch call so the scheduler picks a node with at
-                            least that much GPU VRAM. Use this to distinguish 40 GB vs
-                            80 GB A100s, or to target RTX Pro 6000 (96g). On Euler,
-                            --gpu-type alone does not enforce memory — this flag does.
-  --partition NAME        Override the SLURM partition (default: auto-selected from --time:
-                            ≤4h → gpupr.4h, ≤24h → gpupr.24h, else → gpupr.120h)
+                            least that much GPU VRAM. Only on sites with "gpu_mem_gres"
+                            (Euler, where --gpu-type alone does not enforce memory).
+  --partition NAME        Override the SLURM partition. Default from the site profile:
+                            "cpu_partition" / "gpu_partition", or on Euler picked from
+                            --time (≤4h → gpupr.4h, ≤24h → gpupr.24h, else → gpupr.120h)
   -h, --help              Show this help
 
 Without --task / --task-file, reads the task from config/task.json.
 Additional flags (--project, --workspace, --max-budget-usd, --effort, --auth, --ref,
---extra-bind, --extra-read-bind, --binds-file, --remote-control) are forwarded to
-euler-agent-run; see: euler-agent-run --help
+--extra-bind, --extra-read-bind, --binds-file, --remote-control, --rc-continue,
+--rc-session-id) are forwarded to
+hpc-agent-run; see: hpc-agent-run --help
   --extra-bind SPEC            Bind an extra host path read-write into the container (repeatable).
   --extra-read-bind SPEC       Bind an extra host path read-only into the container (repeatable).
   --auth login|subscription|apikey
                                Claude auth (default: login — the stored claude.ai login from
-                               'euler-agent-run --claude-login'). See euler-agent-run --help.
+                               'hpc-agent-run --claude-login'). See hpc-agent-run --help.
   --remote-control             Start a steerable Claude session driven from claude.ai/mobile app.
-                               Claude-only; requires --project. First run 'euler-agent-run --claude-login'.
+                               Claude-only; requires --project. First run 'hpc-agent-run --claude-login'.
 
 EXAMPLES
   # One-off task
-  euler-agent-submit --agent codex --task "Add type annotations to src/"
+  hpc-agent-submit --agent codex --task "Add type annotations to src/"
 
   # Named project (workspace persists across jobs)
-  euler-agent-submit --agent claude --project myanalysis \
+  hpc-agent-submit --agent claude --project myanalysis \
       --task "Explore the dataset and write a summary"
 
   # Read task from a file
-  euler-agent-submit --agent claude --task-file tasks/myanalysis.md
+  hpc-agent-submit --agent claude --task-file tasks/myanalysis.md
 
   # Interactive shell on a compute node
-  euler-agent-submit --interactive --agent codex --project myanalysis
+  hpc-agent-submit --interactive --agent codex --project myanalysis
 
   # Longer time limit
-  euler-agent-submit --agent claude --task "..." --time 8:00:00
+  hpc-agent-submit --agent claude --task "..." --time 8:00:00
 
 CONFIGURATION
-  config/settings.json   SLURM defaults (time, mem, cpus), workspace/logs paths
-  config/task.json       Default task, model, and budget (used when no --task flag)
+  config/settings.json   SLURM defaults (time, mem, cpus), workspace/logs paths, "site"
+  config/sites/*.json    Cluster profile: partitions, GPU request style, max wall time
+  config/task.json      Default task, model, and budget (used when no --task flag)
   config/secrets.env     API keys (gitignored, sourced automatically)
 EOF
 }
 
 SCRIPT_PATH=$(realpath "$0")
 REPO_DIR=$(dirname "$(dirname "$SCRIPT_PATH")")
-SETTINGS="$REPO_DIR/config/settings.json"
-
-SETTINGS_LOCAL="$REPO_DIR/config/settings.local.json"
-if [[ -f "$SETTINGS_LOCAL" ]]; then
-    _TMP=$(mktemp)
-    python3 -c "
-import json
-s = json.load(open('$SETTINGS'))
-s.update(json.load(open('$SETTINGS_LOCAL')))
-json.dump(s, open('$_TMP', 'w'))
-"
-    SETTINGS="$_TMP"
-fi
-
-_setting() {
-    python3 -c "import json; s=json.load(open('$SETTINGS')); print($1)"
-}
+# Merged settings + cluster profile (config/sites/<site>.json); defines _setting and _site.
+source "$REPO_DIR/bin/host-config.sh"
 
 LOGS_DIR=$(_setting "s.get('logs_dir', s['workspace_dir'] + '/logs')")
 SLURM_TIME=$(_setting "s.get('slurm', {}).get('time', '4:00:00')")
@@ -112,7 +102,7 @@ SLURM_CPUS=$(_setting "s.get('slurm', {}).get('cpus', 2)")
 
 INTERACTIVE=false
 GPU=false
-GPU_TYPE="a100"
+GPU_TYPE=$(_site "s.get('default_gpu_type') or ''")
 GPU_MEM=""
 GPU_PARTITION_OVERRIDE=""
 OVERRIDE_TIME=""
@@ -120,31 +110,34 @@ PASSTHROUGH=()
 
 PRESETS_FILE="$REPO_DIR/config/presets.json"
 
+# Presets from config/presets.json, with any the site profile redefines taking their place.
 _apply_preset() {
     local name="$1"
     local preset
     preset=$(python3 -c "
 import json, sys
 p = json.load(open('$PRESETS_FILE'))
-if '$name' not in p:
+p.update(json.load(open('$SETTINGS'))['site_cfg'].get('presets') or {})
+if sys.argv[1] not in p:
     print('Unknown preset. Available: ' + ', '.join(p.keys()), file=sys.stderr)
     sys.exit(1)
-v = p['$name']
+v = p[sys.argv[1]]
 print(v.get('cpus', ''))
 print(v.get('mem_per_cpu', ''))
 print(v.get('gpu', False))
-print(v.get('gpu_type', 'a100'))
+print(v.get('gpu_type') or sys.argv[2])
 print(v.get('gpu_mem', ''))
-") || exit 1
+print('.')  # \$(...) strips trailing empty lines; without this a read below hits EOF
+" "$name" "$GPU_TYPE") || exit 1
     local cpus mem_per_cpu gpu gpu_type gpu_mem
-    IFS=$'\n' read -r cpus mem_per_cpu gpu gpu_type gpu_mem <<< "$preset"
+    { read -r cpus; read -r mem_per_cpu; read -r gpu; read -r gpu_type; read -r gpu_mem; } <<< "$preset"
     [[ -n "$cpus" ]]       && SLURM_CPUS="$cpus"
     [[ -n "$mem_per_cpu" ]] && SLURM_MEM="$mem_per_cpu"
     if [[ "$gpu" == "True" ]]; then
         GPU=true
         GPU_TYPE="$gpu_type"
         GPU_MEM="$gpu_mem"
-        PASSTHROUGH+=(--gpu --gpu-type "$gpu_type")
+        PASSTHROUGH+=(--gpu)
     fi
 }
 
@@ -177,7 +170,7 @@ while [[ $# -gt 0 ]]; do
             PASSTHROUGH+=("$1" "$(realpath -m -- "$2")"); shift 2 ;;
         --preset) _apply_preset "$2"; shift 2 ;;
         --gpu) GPU=true; PASSTHROUGH+=("$1"); shift ;;
-        --gpu-type) GPU_TYPE="$2"; PASSTHROUGH+=("$1" "$2"); shift 2 ;;
+        --gpu-type) GPU_TYPE="$2"; shift 2 ;;
         --gpu-mem) GPU_MEM="$2"; shift 2 ;;
         --cpus) SLURM_CPUS="$2"; shift 2 ;;
         --mem-per-cpu) SLURM_MEM="$2"; shift 2 ;;
@@ -196,83 +189,98 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$OVERRIDE_TIME" ]] && SLURM_TIME="$OVERRIDE_TIME"
+[[ "$GPU" == true && -z "$OVERRIDE_TIME" ]] && SLURM_TIME="4:00:00"
 
-# GPU jobs: pick gpupr partition based on requested time
-_time_to_hours() {
-    local time_str="$1"
-    if [[ "$time_str" =~ ^([0-9]+)-([0-9]+):([0-9]+):([0-9]+)$ ]]; then
-        echo $(( ${BASH_REMATCH[1]}*24 + ${BASH_REMATCH[2]} ))
-    elif [[ "$time_str" =~ ^([0-9]+):([0-9]+):([0-9]+)$ ]]; then
-        echo "${BASH_REMATCH[1]}"
-    else
-        echo 4
+# SLURM time string (M, M:S, H:M:S, D-H, D-H:M, D-H:M:S) -> minutes, rounded up.
+_time_to_minutes() {
+    python3 - "$1" <<'PY'
+import math, re, sys
+t = sys.argv[1]
+m = re.fullmatch(r"(?:(\d+)-)?(\d+)(?::(\d+))?(?::(\d+))?", t)
+if not m:
+    sys.exit("ERROR: cannot parse time '%s' (expected e.g. 4:00:00 or 2-12:00:00)" % t)
+d, a, b, c = (int(x) if x else None for x in m.groups())
+if d is not None:                   # D-H[:M[:S]]
+    secs = ((d * 24 + a) * 60 + (b or 0)) * 60 + (c or 0)
+elif c is not None:                 # H:M:S
+    secs = (a * 60 + b) * 60 + c
+elif b is not None:                 # M:S
+    secs = a * 60 + b
+else:                               # M
+    secs = a * 60
+print(math.ceil(secs / 60))
+PY
+}
+
+REQ_MINUTES=$(_time_to_minutes "$SLURM_TIME") || exit 1
+
+# The site's wall-time ceiling: fail here rather than have sbatch reject the job.
+SITE_MAX_TIME=$(_site "s.get('max_time') or ''")
+if [[ -n "$SITE_MAX_TIME" ]]; then
+    _max_minutes=$(_time_to_minutes "$SITE_MAX_TIME") || exit 1
+    if (( REQ_MINUTES > _max_minutes )); then
+        echo "ERROR: --time $SLURM_TIME exceeds the maximum of $SITE_MAX_TIME on site '$(_site "s['name']")'." >&2
+        exit 1
     fi
+fi
+
+# Partition: --partition, else the site's fixed partition, else (Euler) the smallest
+# time-tiered partition whose limit covers the request.
+_tiered_partition() {
+    python3 - "$SETTINGS" "$REQ_MINUTES" <<'PY'
+import json, math, sys
+tiers = json.load(open(sys.argv[1]))["site_cfg"].get("gpu_partitions_by_hours") or {}
+hours = math.ceil(int(sys.argv[2]) / 60)
+fits = sorted((int(h), p) for h, p in tiers.items() if int(h) >= hours)
+largest = max(((int(h), p) for h, p in tiers.items()), default=(0, ""))
+print((fits[0] if fits else largest)[1])
+PY
 }
 
-_gpu_partition() {
-    local hours; hours=$(_time_to_hours "$1")
-    if (( hours <= 4 )); then echo "gpupr.4h"
-    elif (( hours <= 24 )); then echo "gpupr.24h"
-    else echo "gpupr.120h"
-    fi
-}
-
-# Known max hours per partition name (suffix-based for gpupr/gpu/gpuhe families)
-_partition_max_hours() {
-    case "$1" in
-        *.4h)   echo 4   ;;
-        *.24h)  echo 24  ;;
-        *.120h) echo 120 ;;
-        *.bulk) echo 360 ;;
-        *)      echo ""  ;;  # unknown — skip check
-    esac
-}
-
+PARTITION="$GPU_PARTITION_OVERRIDE"
 if [[ "$GPU" == true ]]; then
-    [[ -z "$OVERRIDE_TIME" ]] && SLURM_TIME="4:00:00"
-    if [[ -n "$GPU_PARTITION_OVERRIDE" ]]; then
-        GPU_PARTITION="$GPU_PARTITION_OVERRIDE"
-        _max=$(_partition_max_hours "$GPU_PARTITION")
-        if [[ -n "$_max" ]]; then
-            _requested=$(_time_to_hours "$SLURM_TIME")
-            if (( _requested > _max )); then
-                echo "WARNING: requested time ${SLURM_TIME} (${_requested}h) exceeds the" \
-                     "max for partition ${GPU_PARTITION} (${_max}h) — SLURM will likely reject this job." >&2
-            fi
-        fi
-    else
-        GPU_PARTITION=$(_gpu_partition "$SLURM_TIME")
-    fi
-    GPU_SLURM_ARGS=(--gpus=${GPU_TYPE}:1 -p ${GPU_PARTITION} --tmp=50G)
+    [[ -z "$PARTITION" ]] && PARTITION=$(_site "s.get('gpu_partition') or ''")
+    [[ -z "$PARTITION" ]] && PARTITION=$(_tiered_partition)
+    # One GPU in the site's request form; {type} becomes "TYPE:" or nothing (any GPU).
+    _gpu_request=$(_site "s.get('gpu_request') or '--gpus={type}1'")
+    GPU_SLURM_ARGS=("${_gpu_request//\{type\}/${GPU_TYPE:+$GPU_TYPE:}}")
+    while IFS= read -r _arg; do
+        [[ -n "$_arg" ]] && GPU_SLURM_ARGS+=("$_arg")
+    done < <(_site "'\n'.join(s.get('gpu_sbatch_args') or [])")
     # On Euler, --gpus=TYPE does not enforce the GPU type — the scheduler ignores the name
     # and assigns any available GPU. Use --gres=gpumem:SIZE to filter by VRAM instead.
     if [[ -n "$GPU_MEM" ]]; then
+        if [[ "$(_site "s.get('gpu_mem_gres', False)")" != True ]]; then
+            echo "ERROR: --gpu-mem is not supported on site '$(_site "s['name']")' (no gpumem gres)." >&2
+            exit 1
+        fi
         GPU_SLURM_ARGS+=(--gres=gpumem:${GPU_MEM})
     fi
 else
+    [[ -z "$PARTITION" ]] && PARTITION=$(_site "s.get('cpu_partition') or ''")
     GPU_SLURM_ARGS=()
-    [[ -n "$GPU_PARTITION_OVERRIDE" ]] && GPU_SLURM_ARGS+=(-p "$GPU_PARTITION_OVERRIDE")
 fi
+[[ -n "$PARTITION" ]] && GPU_SLURM_ARGS+=(-p "$PARTITION")
 
 mkdir -p "$LOGS_DIR"
 
 if [[ "$INTERACTIVE" == true ]]; then
     echo "Starting interactive session on a compute node..."
-    echo "Agent launcher available at: $REPO_DIR/bin/euler-agent-run"
+    echo "Agent launcher available at: $REPO_DIR/bin/hpc-agent-run"
     srun \
         --time="$SLURM_TIME" \
         --mem-per-cpu="$SLURM_MEM" \
         --cpus-per-task="$SLURM_CPUS" \
         "${GPU_SLURM_ARGS[@]+"${GPU_SLURM_ARGS[@]}"}" \
         --pty \
-        "$REPO_DIR/bin/euler-agent-run" --interactive "${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}"
+        "$REPO_DIR/bin/hpc-agent-run" --interactive "${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}"
 else
     SBATCH_CMD=(sbatch
         "${GPU_SLURM_ARGS[@]+"${GPU_SLURM_ARGS[@]}"}"
         --time="$SLURM_TIME"
         --mem-per-cpu="$SLURM_MEM"
         --cpus-per-task="$SLURM_CPUS"
-        --export=ALL,EULER_AGENTS_DIR="$REPO_DIR"
+        --export=ALL,HPC_AGENTS_DIR="$REPO_DIR"
         --output="$LOGS_DIR/slurm-%j.out"
         --error="$LOGS_DIR/slurm-%j.err"
         "$REPO_DIR/slurm/run-agent.sh"
