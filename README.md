@@ -1,5 +1,7 @@
 # euler_agents
 
+![hpc_agents: start an agent on a compute node, let it work in a sandbox, follow it from your phone](docs/hpc_agents_overview.png)
+
 ## In a nutshell
 
 Run Claude Code on SLURM compute nodes. This fork is set up for UNIL's **Curnagl**; the ETH
